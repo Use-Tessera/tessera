@@ -98,11 +98,13 @@ These are tracked as roadmap items, not hidden:
    assets. SEP-41 `transfer` calls are capped when the token is listed under
    `[[token]]`; other contract functions (`approve`, swaps, custom calls) are
    allowed or refused by contract and function only, not by amount.
-4. **The latest ledger comes from the coordinator.** A signer cannot read the
-   chain itself, so it trusts the coordinator's `latest_ledger` when bounding
-   an authorization's lifetime. It refuses values more than about a day behind
-   the highest it has seen, which limits but does not remove the risk of a
-   malicious coordinator stretching an authorization's validity. Signers
-   reading an RPC of their own is on the roadmap.
+4. **Without `rpc`, the latest ledger comes from the coordinator.** A signer
+   configured with its own `rpc` reads the latest ledger there, ignores the
+   coordinator's value, and refuses to sign authorizations when RPC is down.
+   A signer without one trusts the coordinator's `latest_ledger`, refusing
+   only values more than about a day behind the highest it has seen, which
+   limits but does not remove the risk of a malicious coordinator stretching
+   an authorization's validity. Give every signer that signs authorization
+   entries its own RPC, ideally run by its own operator.
 5. **No audit yet.** Until an independent review, keep the group's balance at
    what you can afford to lose.

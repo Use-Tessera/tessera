@@ -80,6 +80,8 @@ share = "share-1.json"
 policy = "policy.toml"
 state_dir = "state"
 token_env = "TESSERA_TOKEN"
+# Optional: read the latest ledger here instead of trusting the coordinator's
+rpc = "https://soroban-testnet.stellar.org"
 ```
 
 The policy format is documented in [`examples/policy.toml`](examples/policy.toml).
