@@ -42,3 +42,10 @@ functions = ["transfer"]
 # per_transaction = "250"
 # per_day = "1000"
 # decimals = 7
+
+# Optional. Allows signing Soroban authorization entries, which let a contract
+# call made by someone else (a relayer, an x402 facilitator) act for the group.
+# Every call in the entry's invocation tree must be allowed above, and the
+# entry must expire within this many ledgers (about 5 s each) of the latest.
+# [auth]
+# max_validity_ledgers = 120
