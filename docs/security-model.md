@@ -43,6 +43,13 @@ another account are refused, and every transaction must expire within
 daily limit. Spend counts on approval, even if the transaction is never
 submitted. That's conservative by design.
 
+**Authorization entries.** For contract calls submitted by someone else
+(an x402 facilitator, a relayer), signers sign a `SorobanAuthorizationEntry`
+instead of a transaction. The whole invocation tree is judged, not just the
+root call, so an allowed call cannot carry a forbidden sub-invocation. Signing
+entries is off unless the policy has an `[auth]` section, and the entry must
+expire within `max_validity_ledgers` of the network's latest ledger.
+
 **Verified output.** The coordinator verifies the aggregate with Go's
 `crypto/ed25519` against the group key and its own hash of the transaction.
 
@@ -67,5 +74,11 @@ These are tracked as roadmap items, not hidden:
 3. **Daily limits are per signer and per asset in stroops.** They do not
    convert between assets, and contract calls (including SEP-41 `transfer`)
    are allowed or refused by contract and function only, not by amount.
-4. **No audit yet.** Until an independent review, keep the group's balance at
+4. **The latest ledger comes from the coordinator.** A signer cannot read the
+   chain itself, so it trusts the coordinator's `latest_ledger` when bounding
+   an authorization's lifetime. It refuses values more than about a day behind
+   the highest it has seen, which limits but does not remove the risk of a
+   malicious coordinator stretching an authorization's validity. Signers
+   reading an RPC of their own is on the roadmap.
+5. **No audit yet.** Until an independent review, keep the group's balance at
    what you can afford to lose.
