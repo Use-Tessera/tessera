@@ -21,6 +21,7 @@
 //! messages they exchange, and [`keys`] the encrypted share files.
 
 pub mod auth;
+pub mod dkg;
 mod error;
 pub mod keys;
 pub mod protocol;

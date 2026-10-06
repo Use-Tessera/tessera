@@ -37,6 +37,10 @@ pub enum Error {
     /// The operating system's random number generator failed.
     #[error("system randomness unavailable")]
     Randomness,
+
+    /// Distributed key generation received inconsistent or tampered messages.
+    #[error("DKG: {0}")]
+    Dkg(String),
 }
 
 impl Error {

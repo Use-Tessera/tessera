@@ -26,6 +26,7 @@ serde_json.workspace = true
 hex.workspace = true
 base64.workspace = true
 thiserror.workspace = true
+x25519-dalek.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true

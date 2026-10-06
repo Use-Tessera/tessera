@@ -104,8 +104,8 @@ pub(crate) fn group_key(vk: &VerifyingKey) -> [u8; 32] {
 /// Generates shares with a trusted dealer.
 ///
 /// The dealer sees the whole key while it runs. Use it for development, or
-/// on an offline machine whose memory is discarded afterwards; distributed key
-/// generation is on the roadmap.
+/// on an offline machine whose memory is discarded afterwards, or use
+/// [`crate::dkg`] so that no machine ever holds the whole key.
 pub fn deal(threshold: u16, signers: u16) -> Result<Vec<KeyShare>, Error> {
     if threshold < 2 || threshold > signers || signers > 255 {
         return Err(Error::Threshold { threshold, signers });
