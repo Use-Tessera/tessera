@@ -38,8 +38,9 @@ cargo test --workspace
 ## Fixtures
 
 - `crates/tessera-core/tests/fixtures/payment.xdr`: an unsigned testnet payment.
-- `crates/tessera-signer/tests/fixtures/transcript.json`: a real 2-of-3 signing
-  run that `tessera-coordinator` replays in its tests.
+- `crates/tessera-signer/tests/fixtures/transcript.json`: real 2-of-3 runs over
+  a transaction and a Soroban authorization entry, which `tessera-coordinator`
+  replays in its tests.
 
 Regenerate both with `UPDATE_FIXTURES=1 cargo test --workspace`. If the
 transcript changes, copy it to `tessera-coordinator/testdata/` in the same change.
