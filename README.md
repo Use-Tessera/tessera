@@ -106,6 +106,18 @@ recipient and bound to sender and recipient, and `exchange` refuses to run
 unless the round-1 fingerprint matches the one everyone agreed on, which
 catches a swapped commitment or encryption key.
 
+Refresh shares on a schedule, or after a machine may have been compromised,
+by running the same steps from each current share:
+
+```sh
+tessera dkg start --refresh share-1.json --state dkg.state > round1-1.json
+```
+
+The account stays the same, and a share from before the refresh no longer
+combines with one from after it, so a share that leaked last month is worth
+nothing once everyone has refreshed. Refreshing with `--participants` set to
+fewer holders (at least the threshold) removes the others from the group.
+
 ## How a signature happens
 
 ```text
@@ -140,7 +152,7 @@ mTLS; and the code has not been audited.
 2. **Coordinator.** Done:
    [`tessera-coordinator`](https://github.com/Use-Tessera/tessera-coordinator).
 3. **Key generation and rotation.** Distributed key generation over an
-   untrusted relay: done. Proactive share refresh: next.
+   untrusted relay, and proactive share refresh: done.
 4. **Richer signing.** Soroban authorization entries (address credentials)
    and SEP-41 `transfer` limits: done.
 5. **Hardening.** mTLS between coordinator and signers, HSM/enclave-backed

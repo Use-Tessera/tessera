@@ -68,6 +68,13 @@ SHA-256 fingerprint of the whole round-1 set, which operators compare over a
 channel the relay does not control. State between steps is sealed like a
 share file and deleted once the share is written.
 
+**Share refresh.** `tessera dkg start --refresh` re-randomises every share
+over the same encrypted channel without changing the group key. Old and new
+shares do not combine, so an attacker must collect `t` shares between two
+refreshes, not over the account's lifetime. Refresh messages name the account
+they refresh, so they cannot be mixed into another group's ceremony or a new
+key generation. Delete the old share files once every holder has finished.
+
 **Shares at rest.** Argon2id (64 MiB, 3 passes) derives a key that encrypts the
 share with XChaCha20-Poly1305. The public header (account, identifier,
 threshold) is authenticated as associated data, so editing it makes the file
