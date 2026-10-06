@@ -79,11 +79,6 @@ impl KeyShare {
 
     /// Encrypts the share under `passphrase`.
     pub fn seal(&self, passphrase: &[u8], kdf: KdfParams) -> Result<ShareFile, Error> {
-        let mut salt = [0u8; 16];
-        let mut nonce = [0u8; 24];
-        getrandom::fill(&mut salt).map_err(|_| Error::Randomness)?;
-        getrandom::fill(&mut nonce).map_err(|_| Error::Randomness)?;
-        let key = derive_key(passphrase, &salt, kdf)?;
         let header = ShareHeader {
             format: SHARE_FORMAT.into(),
             account: self.account(),
@@ -93,19 +88,8 @@ impl KeyShare {
             public_key_package: hex::encode(self.public_key_package.serialize()?),
         };
         let plaintext = Zeroizing::new(self.key_package.serialize()?);
-        let aad = header.aad()?;
-        let ciphertext = XChaCha20Poly1305::new((&*key).into())
-            .encrypt(XNonce::from_slice(&nonce), Payload { msg: &plaintext, aad: &aad })
-            .map_err(|_| Error::Decrypt)?;
-        Ok(ShareFile {
-            header,
-            secret: Sealed {
-                kdf,
-                salt: hex::encode(salt),
-                nonce: hex::encode(nonce),
-                ciphertext: hex::encode(ciphertext),
-            },
-        })
+        let secret = Sealed::seal(passphrase, kdf, &header.aad()?, &plaintext)?;
+        Ok(ShareFile { header, secret })
     }
 }
 
@@ -197,6 +181,38 @@ pub struct Sealed {
     pub ciphertext: String,
 }
 
+impl Sealed {
+    /// Encrypts `plaintext` under a key derived from `passphrase`, binding `aad`.
+    pub(crate) fn seal(passphrase: &[u8], kdf: KdfParams, aad: &[u8], plaintext: &[u8]) -> Result<Self, Error> {
+        let mut salt = [0u8; 16];
+        let mut nonce = [0u8; 24];
+        getrandom::fill(&mut salt).map_err(|_| Error::Randomness)?;
+        getrandom::fill(&mut nonce).map_err(|_| Error::Randomness)?;
+        let key = derive_key(passphrase, &salt, kdf)?;
+        let ciphertext = XChaCha20Poly1305::new((&*key).into())
+            .encrypt(XNonce::from_slice(&nonce), Payload { msg: plaintext, aad })
+            .map_err(|_| Error::Decrypt)?;
+        Ok(Self { kdf, salt: hex::encode(salt), nonce: hex::encode(nonce), ciphertext: hex::encode(ciphertext) })
+    }
+
+    /// Decrypts; fails on a wrong passphrase or if the ciphertext or `aad` changed.
+    pub(crate) fn open(&self, passphrase: &[u8], aad: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+        let hx = |what, s: &str| hex::decode(s).map_err(|e| Error::malformed(what, e));
+        let salt = hx("salt", &self.salt)?;
+        let nonce = hx("nonce", &self.nonce)?;
+        if nonce.len() != 24 {
+            return Err(Error::malformed("nonce", "expected 24 bytes"));
+        }
+        let ciphertext = hx("ciphertext", &self.ciphertext)?;
+        let key = derive_key(passphrase, &salt, self.kdf)?;
+        Ok(Zeroizing::new(
+            XChaCha20Poly1305::new((&*key).into())
+                .decrypt(XNonce::from_slice(&nonce), Payload { msg: &ciphertext, aad })
+                .map_err(|_| Error::Decrypt)?,
+        ))
+    }
+}
+
 /// A key share as stored on disk.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -225,22 +241,11 @@ impl ShareFile {
 
     /// Decrypts the share. Fails if the passphrase is wrong or any header field was altered.
     pub fn open(&self, passphrase: &[u8]) -> Result<KeyShare, Error> {
-        let hx = |what, s: &str| hex::decode(s).map_err(|e| Error::malformed(what, e));
-        let salt = hx("salt", &self.secret.salt)?;
-        let nonce = hx("nonce", &self.secret.nonce)?;
-        if nonce.len() != 24 {
-            return Err(Error::malformed("nonce", "expected 24 bytes"));
-        }
-        let ciphertext = hx("ciphertext", &self.secret.ciphertext)?;
-        let key = derive_key(passphrase, &salt, self.secret.kdf)?;
-        let plaintext = Zeroizing::new(
-            XChaCha20Poly1305::new((&*key).into())
-                .decrypt(XNonce::from_slice(&nonce), Payload { msg: &ciphertext, aad: &self.header.aad()? })
-                .map_err(|_| Error::Decrypt)?,
-        );
+        let plaintext = self.secret.open(passphrase, &self.header.aad()?)?;
         let key_package = KeyPackage::deserialize(&plaintext)?;
-        let public_key_package =
-            PublicKeyPackage::deserialize(&hx("public key package", &self.header.public_key_package)?)?;
+        let public_key_package = PublicKeyPackage::deserialize(
+            &hex::decode(&self.header.public_key_package).map_err(|e| Error::malformed("public key package", e))?,
+        )?;
         let share = KeyShare::new(key_package, public_key_package);
         if share.account() != self.header.account || share.identifier_hex() != self.header.identifier {
             return Err(Error::Decrypt);
