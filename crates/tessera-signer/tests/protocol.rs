@@ -18,7 +18,10 @@ use tessera_signer::{Signer, router};
 use tower::ServiceExt;
 
 const NOW: u64 = 1_791_249_500;
-const POLICY: &str = include_str!("../../../examples/policy.toml");
+const POLICY: &str = concat!(
+    include_str!("../../../examples/policy.toml"),
+    "\n[auth]\nmax_validity_ledgers = 120\n[[token]]\ncontract = \"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC\"\nper_transaction = \"100\"\nper_day = \"500\"\n"
+);
 const TOKEN: &str = "s3cret-token";
 
 struct Group {
@@ -244,4 +247,92 @@ fn the_spend_ledger_survives_restarts() {
     let reopened = SpendLedger::open(&path).unwrap();
     assert_eq!(reopened.spent_since("native", NOW + 10), 30);
     assert_eq!(reopened.spent_since("native", NOW + 86_400), 0, "entries age out after 24h");
+}
+
+fn auth_entry(group: [u8; 32], xlm: u64, expires: u32) -> String {
+    let account =
+        |k: [u8; 32]| ScVal::Address(ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(k)))));
+    let e = SorobanAuthorizationEntry {
+        credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+            address: ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(group)))),
+            nonce: 42,
+            signature_expiration_ledger: expires,
+            signature: ScVal::Void,
+        }),
+        root_invocation: SorobanAuthorizedInvocation {
+            function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                contract_address: ScAddress::Contract(
+                    "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".parse().unwrap(),
+                ),
+                function_name: ScSymbol(b"transfer".to_vec().try_into().unwrap()),
+                args: vec![account(group), account([7; 32]), ScVal::I128(Int128Parts { hi: 0, lo: xlm * 10_000_000 })]
+                    .try_into()
+                    .unwrap(),
+            }),
+            sub_invocations: VecM::default(),
+        },
+    };
+    tessera_core::auth::encode_entry(&e).unwrap()
+}
+
+#[tokio::test]
+async fn two_of_three_sign_an_authorization_entry() {
+    let g = group();
+    let key = g.shares[0].group_public_key();
+    let entry = auth_entry(key, 5, 1_060);
+    let commitments = round1(&g, &[1, 2], "auth").await;
+    let mut shares = BTreeMap::new();
+    for i in [1, 2] {
+        let body =
+            json!({ "session": "auth", "auth_entry": entry, "latest_ledger": 1_000, "commitments": commitments });
+        let (st, v) = post(&g.routers[i], "/v1/round2/auth", body).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        shares.insert(v["identifier"].as_str().unwrap().to_owned(), v["share"].as_str().unwrap().to_owned());
+    }
+    let (st, v) = post(
+        &g.routers[0],
+        "/v1/aggregate/auth",
+        json!({ "auth_entry": entry, "commitments": commitments, "shares": shares }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let signed = tessera_core::auth::decode_entry(v["auth_entry"].as_str().unwrap()).unwrap();
+    let hash = tessera_core::auth::payload_hash(&Network::from_name("testnet"), &signed).unwrap();
+    let sig: [u8; 64] = hex::decode(v["signature"].as_str().unwrap()).unwrap().try_into().unwrap();
+    ed25519_dalek::VerifyingKey::from_bytes(&key)
+        .unwrap()
+        .verify_strict(&hash, &ed25519_dalek::Signature::from_bytes(&sig))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn authorization_entries_obey_the_policy() {
+    let g = group();
+    let key = g.shares[0].group_public_key();
+    for (session, entry, latest, want) in [
+        ("big", auth_entry(key, 150, 1_060), 1_000, "per_transaction"),
+        ("long", auth_entry(key, 1, 5_000), 1_000, "max_validity_ledgers"),
+        ("other", auth_entry([3; 32], 1, 1_060), 1_000, "not the group account"),
+    ] {
+        let commitments = round1(&g, &[0, 1], session).await;
+        let body =
+            json!({ "session": session, "auth_entry": entry, "latest_ledger": latest, "commitments": commitments });
+        let (st, v) = post(&g.routers[0], "/v1/round2/auth", body).await;
+        assert_eq!(st, StatusCode::FORBIDDEN, "{session}: {v}");
+        assert!(v["violations"].to_string().contains(want), "{session}: {v}");
+    }
+}
+
+#[tokio::test]
+async fn a_stale_latest_ledger_is_refused() {
+    let g = group();
+    let key = g.shares[0].group_public_key();
+    let commitments = round1(&g, &[0, 1], "fresh").await;
+    let ok = json!({ "session": "fresh", "auth_entry": auth_entry(key, 1, 100_060), "latest_ledger": 100_000, "commitments": commitments });
+    assert_eq!(post(&g.routers[0], "/v1/round2/auth", ok).await.0, StatusCode::OK);
+    let commitments = round1(&g, &[0, 1], "stale").await;
+    let stale = json!({ "session": "stale", "auth_entry": auth_entry(key, 1, 1_060), "latest_ledger": 1_000, "commitments": commitments });
+    let (st, v) = post(&g.routers[0], "/v1/round2/auth", stale).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("stale"));
 }

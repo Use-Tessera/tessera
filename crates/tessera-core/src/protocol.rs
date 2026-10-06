@@ -99,3 +99,40 @@ pub struct ErrorBody {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub violations: Vec<String>,
 }
+
+/// `POST /v1/round2/auth`: ask for a signature share over a Soroban authorization entry.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthRound2Request {
+    /// Session from round 1.
+    pub session: String,
+    /// `SorobanAuthorizationEntry` with address credentials, base64 XDR.
+    pub auth_entry: String,
+    /// The network's latest ledger, used to bound the signature's lifetime.
+    pub latest_ledger: u32,
+    /// Commitments of every participating signer, this one included.
+    pub commitments: BTreeMap<String, String>,
+}
+
+/// `POST /v1/aggregate/auth`: combine shares into a signed authorization entry.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthAggregateRequest {
+    /// The entry that was signed, base64 XDR.
+    pub auth_entry: String,
+    /// Commitments used in round 2.
+    pub commitments: BTreeMap<String, String>,
+    /// Signature shares from round 2.
+    pub shares: BTreeMap<String, String>,
+}
+
+/// Response to [`AuthAggregateRequest`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthAggregateResponse {
+    /// Payload hash that was signed, hex.
+    pub hash: String,
+    /// Ed25519 signature, hex.
+    pub signature: String,
+    /// The entry with its credentials signed, base64 XDR.
+    pub auth_entry: String,
+}

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Request, State};
@@ -10,12 +11,12 @@ use axum::{Json, Router};
 use sha2::{Digest, Sha256};
 use tessera_core::keys::KeyShare;
 use tessera_core::protocol::{
-    AggregateRequest, AggregateResponse, ErrorBody, Info, PROTOCOL, Round1Request, Round1Response, Round2Request,
-    Round2Response,
+    AggregateRequest, AggregateResponse, AuthAggregateRequest, AuthAggregateResponse, AuthRound2Request, ErrorBody,
+    Info, PROTOCOL, Round1Request, Round1Response, Round2Request, Round2Response,
 };
 use tessera_core::stellar::{self, Network};
-use tessera_core::{Error, signing};
-use tessera_policy::{Intent, Policy};
+use tessera_core::{Error, auth, signing};
+use tessera_policy::{AuthIntent, Intent, Policy};
 
 use crate::state::{NonceError, Nonces, SpendLedger};
 
@@ -29,7 +30,11 @@ pub struct Signer {
     nonces: Nonces,
     ledger: SpendLedger,
     clock: Box<dyn Fn() -> u64 + Send + Sync>,
+    highest_ledger: AtomicU32,
 }
+
+/// How far behind the highest ledger seen a request's `latest_ledger` may be (about a day).
+const STALE_LEDGERS: u32 = 17_280;
 
 impl Signer {
     /// Assembles a signer. `policy_text` is hashed so operators can confirm which policy is live.
@@ -57,6 +62,7 @@ impl Signer {
             nonces: Nonces::default(),
             ledger,
             clock: Box::new(|| SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)),
+            highest_ledger: AtomicU32::new(0),
         })
     }
 
@@ -74,6 +80,8 @@ pub fn router(signer: Arc<Signer>) -> Router {
         .route("/v1/round1", post(round1))
         .route("/v1/round2", post(round2))
         .route("/v1/aggregate", post(aggregate))
+        .route("/v1/round2/auth", post(round2_auth))
+        .route("/v1/aggregate/auth", post(aggregate_auth))
         .route_layer(middleware::from_fn_with_state(signer.clone(), authorize))
         .with_state(signer)
 }
@@ -189,5 +197,64 @@ async fn aggregate(State(s): State<Arc<Signer>>, Json(req): Json<AggregateReques
         hash: hex::encode(hash),
         signature: hex::encode(signature),
         envelope: stellar::encode_envelope(&envelope)?,
+    }))
+}
+
+/// Signs a share over a Soroban authorization entry if the policy allows it.
+///
+/// The coordinator supplies the network's latest ledger. A signer cannot check
+/// it on its own, so it only accepts values that never fall more than about a
+/// day behind the highest it has seen; see docs/security-model.md.
+async fn round2_auth(State(s): State<Arc<Signer>>, Json(req): Json<AuthRound2Request>) -> ApiResult<Round2Response> {
+    let nonces = s
+        .nonces
+        .take(&req.session)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired session"))?;
+    let entry = auth::decode_entry(&req.auth_entry)?;
+    let seen = s.highest_ledger.fetch_max(req.latest_ledger, Ordering::SeqCst);
+    if req.latest_ledger.saturating_add(STALE_LEDGERS) < seen {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            format!("latest_ledger {} is stale (seen {seen})", req.latest_ledger),
+        ));
+    }
+    let intent = AuthIntent::from_entry(&entry)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "only address-credential entries can be signed"))?;
+    let now = (s.clock)();
+    let decision = s
+        .policy
+        .evaluate_auth(&intent, &s.share.account(), req.latest_ledger, |asset| s.ledger.spent_since(asset, now));
+    let hash = auth::payload_hash(&s.network, &entry)?;
+    let tag = hex::encode(hash);
+    if !decision.approved() {
+        tracing::warn!(auth = tag, violations = ?decision.violations, "refused");
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            ErrorBody { error: "policy refused the authorization".into(), violations: decision.violations },
+        ));
+    }
+    let package = signing::package_for(&hash, &req.commitments)?;
+    let share = signing::sign(&s.share, nonces, &package)?;
+    let spend: Vec<(String, i128)> = decision.spend.into_iter().collect();
+    s.ledger
+        .record(now, &tag, &spend)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("recording spend: {e}")))?;
+    tracing::info!(auth = tag, "signed");
+    Ok(Json(Round2Response { identifier: s.share.identifier_hex(), share }))
+}
+
+async fn aggregate_auth(
+    State(s): State<Arc<Signer>>,
+    Json(req): Json<AuthAggregateRequest>,
+) -> ApiResult<AuthAggregateResponse> {
+    let mut entry = auth::decode_entry(&req.auth_entry)?;
+    let hash = auth::payload_hash(&s.network, &entry)?;
+    let package = signing::package_for(&hash, &req.commitments)?;
+    let signature = signing::aggregate(s.share.public_key_package(), &package, &req.shares)?;
+    auth::attach_signature(&mut entry, &s.share.group_public_key(), &signature)?;
+    Ok(Json(AuthAggregateResponse {
+        hash: hex::encode(hash),
+        signature: hex::encode(signature),
+        auth_entry: auth::encode_entry(&entry)?,
     }))
 }
