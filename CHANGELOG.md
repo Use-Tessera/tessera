@@ -20,10 +20,9 @@ All notable changes to this project are documented here. The format follows
 - `tessera-policy`: deny-by-default policies over decoded transactions and
   whole authorization invocation trees, with per-asset and SEP-41 token limits
   per transaction and per day, destination allowlists and validity bounds.
-- `tessera-signer`: one share behind a policy-enforcing HTTP API, with an
-  optional RPC of its own for the latest ledger,
-  single-use nonces, a durable spend ledger, a decision log, request limits and
-  Prometheus metrics.
+- `tessera-signer`: one share behind a policy-enforcing HTTP API, with
+  single-use nonces, a durable spend ledger, a decision log, request limits,
+  Prometheus metrics, and optionally its own RPC for the latest ledger.
 - `tessera` CLI: `dkg`, `keygen` (development dealer), `inspect`, `check`
   (transactions, or authorization entries with `--latest-ledger`) and `share`.
 - A recorded 2-of-3 transcript, replayed by tessera-coordinator's tests.
