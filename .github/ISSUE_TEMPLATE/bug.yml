@@ -1,0 +1,25 @@
+name: Bug
+description: Something signs that shouldn't, refuses what it shouldn't, or crashes.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Signing or policy bypasses are security issues: report them through SECURITY.md, not here."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Command or code, input (bundle, ledger, tx hash), and output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: tessera --version
