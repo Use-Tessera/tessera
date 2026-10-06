@@ -1,0 +1,30 @@
+[package]
+name = "tessera-cli"
+description = "Tessera command line: key generation, transaction inspection and policy checks."
+keywords = ["stellar", "frost", "threshold", "cli"]
+categories = ["command-line-utilities", "cryptography::cryptocurrencies"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "tessera"
+path = "src/main.rs"
+
+[dependencies]
+tessera-core.workspace = true
+tessera-policy.workspace = true
+clap.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
+
+[lints]
+workspace = true
