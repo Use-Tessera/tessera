@@ -1,6 +1,8 @@
 //! `tessera`: key generation, transaction inspection and policy checks.
 
-use std::io::Read;
+mod dkg;
+
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -57,6 +59,13 @@ enum Command {
         /// Envelope, or `-`.
         envelope: String,
     },
+    /// Generate key shares by distributed key generation: no machine ever holds the whole key.
+    ///
+    /// The state between steps, and the final share, are encrypted with `$TESSERA_PASSPHRASE`.
+    Dkg {
+        #[command(subcommand)]
+        step: dkg::Step,
+    },
     /// Show the public header of a share file.
     Share {
         /// Share file.
@@ -83,6 +92,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Inspect { envelope, network } => inspect(&read_envelope(&envelope)?, &Network::from_name(&network)),
         Command::Check { policy, account, envelope } => check(&policy, &account, &read_envelope(&envelope)?),
+        Command::Dkg { step } => dkg::run(step),
         Command::Share { file } => {
             let f = ShareFile::from_json(&read(&file)?).map_err(|e| e.to_string())?;
             let h = &f.header;
@@ -97,6 +107,23 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))
+}
+
+/// `$TESSERA_PASSPHRASE`, which must be set and non-empty.
+fn passphrase() -> Result<String, String> {
+    std::env::var("TESSERA_PASSPHRASE").ok().filter(|p| !p.is_empty()).ok_or_else(|| "set TESSERA_PASSPHRASE".into())
+}
+
+/// Creates a file, refusing to overwrite one that exists.
+fn write_new(path: &Path, contents: &str) -> Result<(), String> {
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("{} already exists; refusing to overwrite it", path.display())
+        } else {
+            format!("creating {}: {e}", path.display())
+        }
+    })?;
+    f.write_all(contents.as_bytes()).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
 fn read_envelope(arg: &str) -> Result<String, String> {
@@ -125,11 +152,7 @@ fn keygen(threshold: u16, signers: u16, out: &Path, kdf: KdfParams) -> Result<Ex
     for (i, (share, pass)) in shares.iter().zip(&passphrases).enumerate() {
         let file = share.seal(pass.as_bytes(), kdf).map_err(|e| e.to_string())?;
         let path = out.join(format!("share-{}.json", i.saturating_add(1)));
-        if path.exists() {
-            return Err(format!("{} already exists; refusing to overwrite a key share", path.display()));
-        }
-        std::fs::write(&path, file.to_json().map_err(|e| e.to_string())? + "\n")
-            .map_err(|e| format!("writing {}: {e}", path.display()))?;
+        write_new(&path, &(file.to_json().map_err(|e| e.to_string())? + "\n"))?;
     }
     let account = shares.first().map(|s| s.account()).unwrap_or_default();
     println!("{account}");
