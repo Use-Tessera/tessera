@@ -352,3 +352,42 @@ async fn health_needs_no_token_and_bodies_are_capped() {
     let resp = g.routers[0].clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+#[tokio::test]
+async fn every_decision_is_logged_by_the_signer() {
+    use tessera_signer::state::DecisionLog;
+    let shares = keys::deal(2, 2).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("decisions.jsonl");
+    let router = |s: &KeyShare, i: usize| {
+        let ledger = SpendLedger::open(&dir.path().join(format!("spend-{i}.jsonl"))).unwrap();
+        let signer = Signer::new(s.clone(), Network::from_name("testnet"), POLICY, Some(TOKEN.into()), ledger)
+            .unwrap()
+            .with_clock(|| NOW)
+            .with_decision_log(DecisionLog::new(&path));
+        router(Arc::new(signer))
+    };
+    let routers: Vec<Router> = shares.iter().enumerate().map(|(i, s)| router(s, i)).collect();
+    let key = shares[0].group_public_key();
+    let g = Group { shares, routers, _dir: tempfile::tempdir().unwrap() };
+
+    let commitments = round1(&g, &[0, 1], "ok").await;
+    post(
+        &g.routers[0],
+        "/v1/round2",
+        json!({ "session": "ok", "envelope": payment(key, 1), "commitments": commitments }),
+    )
+    .await;
+    let commitments = round1(&g, &[0, 1], "no").await;
+    post(
+        &g.routers[0],
+        "/v1/round2",
+        json!({ "session": "no", "envelope": payment(key, 150), "commitments": commitments }),
+    )
+    .await;
+
+    let log = DecisionLog::new(&path).read().unwrap();
+    assert_eq!(log.len(), 2);
+    assert!(log[0].approved && log[0].kind == "transaction" && log[0].violations.is_empty());
+    assert!(!log[1].approved && log[1].violations[0].contains("per_transaction"));
+}

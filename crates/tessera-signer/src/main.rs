@@ -7,7 +7,7 @@ use clap::Parser;
 use tessera_core::keys::ShareFile;
 use tessera_core::stellar::Network;
 use tessera_signer::config::Config;
-use tessera_signer::state::SpendLedger;
+use tessera_signer::state::{DecisionLog, SpendLedger};
 use tessera_signer::{Signer, router};
 
 #[derive(Parser)]
@@ -50,7 +50,8 @@ async fn run(args: Args) -> Result<(), String> {
     };
     std::fs::create_dir_all(&cfg.state_dir).map_err(|e| format!("creating {}: {e}", cfg.state_dir.display()))?;
     let ledger = SpendLedger::open(&cfg.state_dir.join("spend.jsonl")).map_err(|e| format!("opening ledger: {e}"))?;
-    let signer = Signer::new(share, Network::from_name(&cfg.network), &read(&cfg.policy)?, token, ledger)?;
+    let signer = Signer::new(share, Network::from_name(&cfg.network), &read(&cfg.policy)?, token, ledger)?
+        .with_decision_log(DecisionLog::new(&cfg.state_dir.join("decisions.jsonl")));
 
     let listener =
         tokio::net::TcpListener::bind(&cfg.listen).await.map_err(|e| format!("binding {}: {e}", cfg.listen))?;

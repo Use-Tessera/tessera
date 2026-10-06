@@ -18,7 +18,7 @@ use tessera_core::stellar::{self, Network};
 use tessera_core::{Error, auth, signing};
 use tessera_policy::{AuthIntent, Intent, Policy};
 
-use crate::state::{NonceError, Nonces, SpendLedger};
+use crate::state::{Decision, DecisionLog, NonceError, Nonces, SpendLedger};
 
 /// Everything a running signer needs.
 pub struct Signer {
@@ -31,6 +31,7 @@ pub struct Signer {
     ledger: SpendLedger,
     clock: Box<dyn Fn() -> u64 + Send + Sync>,
     highest_ledger: AtomicU32,
+    decisions: Option<DecisionLog>,
 }
 
 /// How far behind the highest ledger seen a request's `latest_ledger` may be (about a day).
@@ -63,7 +64,28 @@ impl Signer {
             ledger,
             clock: Box::new(|| SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)),
             highest_ledger: AtomicU32::new(0),
+            decisions: None,
         })
+    }
+
+    /// Records every approval and refusal to `log`.
+    pub fn with_decision_log(mut self, log: DecisionLog) -> Self {
+        self.decisions = Some(log);
+        self
+    }
+
+    fn decide(&self, kind: &str, hash: &[u8; 32], violations: &[String]) {
+        let Some(log) = &self.decisions else { return };
+        let d = Decision {
+            time: (self.clock)(),
+            kind: kind.into(),
+            hash: hex::encode(hash),
+            approved: violations.is_empty(),
+            violations: violations.to_vec(),
+        };
+        if let Err(e) = log.append(&d) {
+            tracing::error!("writing decision log: {e}");
+        }
     }
 
     /// Replaces the wall clock (tests).
@@ -188,6 +210,7 @@ async fn round2(State(s): State<Arc<Signer>>, Json(req): Json<Round2Request>) ->
     let decision = s.policy.evaluate(&intent, &s.share.account(), now, |asset| s.ledger.spent_since(asset, now));
     let (package, hash) = signing::signing_package(&s.network, &envelope, &req.commitments)?;
     let tx = hex::encode(hash);
+    s.decide("transaction", &hash, &decision.violations);
     if !decision.approved() {
         tracing::warn!(tx, violations = ?decision.violations, "refused");
         return Err(ApiError(
@@ -243,6 +266,7 @@ async fn round2_auth(State(s): State<Arc<Signer>>, Json(req): Json<AuthRound2Req
         .evaluate_auth(&intent, &s.share.account(), req.latest_ledger, |asset| s.ledger.spent_since(asset, now));
     let hash = auth::payload_hash(&s.network, &entry)?;
     let tag = hex::encode(hash);
+    s.decide("authorization", &hash, &decision.violations);
     if !decision.approved() {
         tracing::warn!(auth = tag, violations = ?decision.violations, "refused");
         return Err(ApiError(

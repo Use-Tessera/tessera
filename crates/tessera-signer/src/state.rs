@@ -110,3 +110,52 @@ impl SpendLedger {
         Ok(())
     }
 }
+
+/// One line of the decision log.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Decision {
+    /// Unix seconds.
+    pub time: u64,
+    /// `transaction` or `authorization`.
+    pub kind: String,
+    /// Hash that was (or would have been) signed, hex.
+    pub hash: String,
+    /// Whether a share was released.
+    pub approved: bool,
+    /// Policy violations when refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub violations: Vec<String>,
+}
+
+/// Append-only record of every approval and refusal this signer made,
+/// independent of the coordinator's audit log.
+pub struct DecisionLog {
+    path: PathBuf,
+    lock: Mutex<()>,
+}
+
+impl DecisionLog {
+    /// Uses (or creates) the log at `path`.
+    pub fn new(path: &Path) -> Self {
+        Self { path: path.to_owned(), lock: Mutex::new(()) }
+    }
+
+    /// Appends one decision.
+    pub fn append(&self, d: &Decision) -> std::io::Result<()> {
+        let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        writeln!(file, "{}", serde_json::to_string(d).map_err(std::io::Error::other)?)
+    }
+
+    /// Reads every decision, oldest first.
+    pub fn read(&self) -> std::io::Result<Vec<Decision>> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        BufReader::new(File::open(&self.path)?)
+            .lines()
+            .filter(|l| l.as_ref().map_or(true, |l| !l.trim().is_empty()))
+            .map(|l| serde_json::from_str(&l?).map_err(std::io::Error::other))
+            .collect()
+    }
+}
