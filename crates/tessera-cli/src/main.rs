@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Parser, Subcommand};
 use tessera_core::keys::{self, KdfParams, ShareFile};
 use tessera_core::stellar::{self, Network};
-use tessera_policy::{Intent, OpKind, Policy, format_amount};
+use tessera_policy::{AuthCall, AuthIntent, Decision, Intent, OpKind, Policy, format_amount};
 
 #[derive(Parser)]
 #[command(name = "tessera", version, about = "Threshold signing for Stellar accounts.")]
@@ -48,7 +48,8 @@ enum Command {
         #[arg(long, default_value = "public")]
         network: String,
     },
-    /// Judge a transaction against a policy, as a signer would. Exit status 1 if refused.
+    /// Judge a transaction, or with `--latest-ledger` a Soroban authorization
+    /// entry, against a policy, as a signer would. Exit status 1 if refused.
     Check {
         /// Policy file.
         #[arg(long)]
@@ -56,7 +57,10 @@ enum Command {
         /// Group account (`G…`).
         #[arg(long)]
         account: String,
-        /// Envelope, or `-`.
+        /// Treat the input as a `SorobanAuthorizationEntry` and judge it as of this ledger.
+        #[arg(long)]
+        latest_ledger: Option<u32>,
+        /// Envelope or authorization entry (base64 XDR), or `-`.
         envelope: String,
     },
     /// Generate key shares by distributed key generation: no machine ever holds the whole key.
@@ -91,7 +95,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             keygen(threshold, signers, &out, kdf)
         }
         Command::Inspect { envelope, network } => inspect(&read_envelope(&envelope)?, &Network::from_name(&network)),
-        Command::Check { policy, account, envelope } => check(&policy, &account, &read_envelope(&envelope)?),
+        Command::Check { policy, account, latest_ledger: None, envelope } => {
+            check(&policy, &account, &read_envelope(&envelope)?)
+        }
+        Command::Check { policy, account, latest_ledger: Some(latest), envelope } => {
+            check_auth(&policy, &account, latest, &read_envelope(&envelope)?)
+        }
         Command::Dkg { step } => dkg::run(step),
         Command::Share { file } => {
             let f = ShareFile::from_json(&read(&file)?).map_err(|e| e.to_string())?;
@@ -202,7 +211,29 @@ fn check(policy: &Path, account: &str, b64: &str) -> Result<ExitCode, String> {
     let policy = Policy::from_toml(&read(policy)?).map_err(|e| e.to_string())?;
     let env = stellar::decode_envelope(b64).map_err(|e| e.to_string())?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let decision = policy.evaluate(&Intent::from_envelope(&env), account, now, |_| 0);
+    report(&policy.evaluate(&Intent::from_envelope(&env), account, now, |_| 0))
+}
+
+fn check_auth(policy: &Path, account: &str, latest_ledger: u32, b64: &str) -> Result<ExitCode, String> {
+    let policy = Policy::from_toml(&read(policy)?).map_err(|e| e.to_string())?;
+    let entry = tessera_core::auth::decode_entry(b64.trim()).map_err(|e| e.to_string())?;
+    let intent = AuthIntent::from_entry(&entry).ok_or("only address-credential entries can be signed")?;
+    for (i, call) in intent.calls.iter().enumerate() {
+        let what = match call {
+            AuthCall::Contract { contract, transfer: Some(t), .. } => {
+                format!("transfer {} units of token {contract} from {} to {}", t.amount, t.from, t.to)
+            }
+            AuthCall::Contract { contract, function, .. } => format!("call {contract}.{function}()"),
+            AuthCall::CreateContract => "deploy a contract".to_owned(),
+        };
+        eprintln!("call {i:<6} {what}");
+    }
+    report(&policy.evaluate_auth(&intent, account, latest_ledger, |_| 0))
+}
+
+/// Prints a decision; exit status 1 if refused. Spend limits are judged as if
+/// nothing had been spent today.
+fn report(decision: &Decision) -> Result<ExitCode, String> {
     if decision.approved() {
         println!("APPROVED");
         return Ok(ExitCode::SUCCESS);

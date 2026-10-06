@@ -67,3 +67,41 @@ fn check_refuses_with_reasons() {
     let s = String::from_utf8(output.stdout).unwrap();
     assert!(s.starts_with("REFUSED") && s.contains("not the group account"), "{s}");
 }
+
+#[test]
+fn check_judges_authorization_entries() {
+    let t: serde_json::Value =
+        serde_json::from_str(include_str!("../../tessera-signer/tests/fixtures/transcript.json")).unwrap();
+    let (entry, account) = (t["auth"]["entry"].as_str().unwrap(), t["account"].as_str().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let with_auth = dir.path().join("policy.toml");
+    let token = "[[token]]\ncontract = \"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC\"";
+    let extra =
+        format!("\n[auth]\nmax_validity_ledgers = 120\n{token}\nper_transaction = \"100\"\nper_day = \"500\"\n");
+    std::fs::write(&with_auth, std::fs::read_to_string(POLICY).unwrap() + &extra).unwrap();
+
+    let run = |policy: &std::path::Path, latest: &str| {
+        let o = tessera()
+            .args(["check", "--account", account, "--latest-ledger", latest, "--policy"])
+            .arg(policy)
+            .arg("-")
+            .write_stdin(entry)
+            .output()
+            .unwrap();
+        (o.status.code(), String::from_utf8(o.stdout).unwrap(), String::from_utf8(o.stderr).unwrap())
+    };
+
+    let (code, stdout, stderr) = run(&with_auth, "1000");
+    assert_eq!(code, Some(0), "{stdout}");
+    assert!(stderr.contains("transfer 50000000 units of token CDLZFC3S"), "{stderr}");
+
+    // Too far ahead of the given ledger.
+    let (code, stdout, _) = run(&with_auth, "900");
+    assert_eq!(code, Some(1));
+    assert!(stdout.contains("max_validity_ledgers"), "{stdout}");
+
+    // The shipped example has no [auth] section, so it refuses all entries.
+    let (code, stdout, _) = run(std::path::Path::new(POLICY), "1000");
+    assert_eq!(code, Some(1));
+    assert!(stdout.contains("[auth]"), "{stdout}");
+}
