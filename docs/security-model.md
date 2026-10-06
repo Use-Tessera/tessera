@@ -52,6 +52,21 @@ expire within `max_validity_ledgers` of the network's latest ledger.
 
 **Verified output.** The coordinator verifies the aggregate with Go's
 `crypto/ed25519` against the group key and its own hash of the transaction.
+For authorization entries it recomputes the payload hash and also checks that
+the returned entry matches the request byte for byte apart from the
+signature.
+
+**Key generation.** `tessera dkg` runs RFC 9591's distributed key generation,
+so the group key is never assembled anywhere. Each participant's round-1
+message carries a FROST commitment with a proof of knowledge of its secret,
+and an X25519 key. Round-2 packages, which carry secret shares, are encrypted
+to the recipient's X25519 key with XChaCha20-Poly1305, under a key derived
+from the shared secret and both identifiers, with sender and recipient as
+associated data. A relay therefore cannot read, alter, redirect or replay
+them. It could substitute a round-1 message, so `exchange` requires the
+SHA-256 fingerprint of the whole round-1 set, which operators compare over a
+channel the relay does not control. State between steps is sealed like a
+share file and deleted once the share is written.
 
 **Shares at rest.** Argon2id (64 MiB, 3 passes) derives a key that encrypts the
 share with XChaCha20-Poly1305. The public header (account, identifier,
@@ -66,9 +81,10 @@ and reordering.
 
 These are tracked as roadmap items, not hidden:
 
-1. **Trusted-dealer key generation.** `tessera keygen` sees the whole key while
-   it runs. Run it on an offline machine you then wipe. Distributed key
-   generation is the next milestone.
+1. **Fingerprints are compared by people.** DKG round-1 messages are not
+   signed by long-term identities; their authenticity rests on operators
+   comparing the fingerprint over an independent channel. `tessera keygen`
+   remains for development and sees the whole key while it runs.
 2. **Bearer-token transport auth.** Signer endpoints check a shared bearer
    token in constant time. Deploy them behind TLS. Mutual TLS is planned.
 3. **Limits are per signer and per asset.** They do not convert between

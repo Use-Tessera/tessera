@@ -57,7 +57,8 @@ Reproduce it with [`scripts/testnet-demo.sh`](https://github.com/Use-Tessera/tes
 ```sh
 cargo install --git https://github.com/Use-Tessera/tessera tessera-cli tessera-signer
 
-# 2-of-3 group, each share encrypted with Argon2id + XChaCha20-Poly1305
+# 2-of-3 group for development: one machine deals all three shares,
+# each encrypted with Argon2id + XChaCha20-Poly1305
 export TESSERA_PASSPHRASE_1=… TESSERA_PASSPHRASE_2=… TESSERA_PASSPHRASE_3=…
 tessera keygen --threshold 2 --signers 3 --out shares/
 
@@ -83,6 +84,28 @@ token_env = "TESSERA_TOKEN"
 
 The policy format is documented in [`examples/policy.toml`](examples/policy.toml).
 
+## Key generation without a dealer
+
+For real funds, generate the key so that it never exists in one place. Each
+operator runs three steps on their own machine and posts the files they print
+anywhere the others can read them:
+
+```sh
+export TESSERA_PASSPHRASE=…   # this operator's own passphrase
+tessera dkg start --index 1 --threshold 2 --signers 3 --state dkg.state > round1-1.json
+
+# once every round1-*.json is in: read the fingerprint aloud on a call
+tessera dkg fingerprint round1-*.json
+
+tessera dkg exchange --state dkg.state --fingerprint <agreed> --out round2/ round1-*.json
+tessera dkg finish --state dkg.state --out share-1.json round2/*.json
+```
+
+The shared folder can be hostile. Round-2 packages are encrypted to each
+recipient and bound to sender and recipient, and `exchange` refuses to run
+unless the round-1 fingerprint matches the one everyone agreed on, which
+catches a swapped commitment or encryption key.
+
 ## How a signature happens
 
 ```text
@@ -99,28 +122,27 @@ soon as round 2 is attempted, whether it signs or refuses.
 
 | Crate | What it is |
 |---|---|
-| `tessera-core` | FROST rounds bound to Stellar transaction hashes, encrypted share files, the `tessera/signer/v1` wire types |
+| `tessera-core` | FROST rounds bound to Stellar transaction hashes and authorization entries, distributed key generation, encrypted share files, the `tessera/signer/v1` wire types |
 | `tessera-policy` | Transaction → intent decoding, deny-by-default policy evaluation |
 | `tessera-signer` | The signer daemon (`axum`) |
-| `tessera-cli` | `tessera keygen`, `inspect`, `check`, `share` |
+| `tessera-cli` | `tessera dkg`, `keygen`, `inspect`, `check`, `share` |
 
 ## Status and limits
 
 Read [docs/security-model.md](docs/security-model.md) before trusting this with
-funds. In short: key generation currently uses a **trusted dealer**
-(distributed key generation is next on the roadmap), signers authenticate the
-coordinator with bearer tokens rather than mTLS, and the code has not been
-audited.
+funds. In short: generate keys with `tessera dkg`, not the development
+dealer; signers authenticate the coordinator with bearer tokens rather than
+mTLS; and the code has not been audited.
 
 ## Roadmap
 
 1. **Signing core and signer daemon.** Done: this repository.
 2. **Coordinator.** Done:
    [`tessera-coordinator`](https://github.com/Use-Tessera/tessera-coordinator).
-3. **Key generation and rotation.** Distributed key generation over end-to-end-encrypted
-   coordinator relay, plus proactive share refresh.
-4. **Richer signing.** Soroban authorization entries (address credentials),
-   and token-amount limits for SEP-41 `transfer`.
+3. **Key generation and rotation.** Distributed key generation over an
+   untrusted relay: done. Proactive share refresh: next.
+4. **Richer signing.** Soroban authorization entries (address credentials)
+   and SEP-41 `transfer` limits: done.
 5. **Hardening.** mTLS between coordinator and signers, HSM/enclave-backed
    share storage, and an external audit.
 
