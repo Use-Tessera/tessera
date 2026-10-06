@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::intent::{Intent, OpKind};
+use crate::intent::{AuthCall, AuthIntent, Intent, OpKind};
 
 /// Operation names a policy may allow.
 pub const OPERATIONS: &[&str] = &[
@@ -62,6 +62,14 @@ struct File {
     contracts: Vec<ContractRule>,
     #[serde(default, rename = "token")]
     tokens: Vec<TokenRule>,
+    #[serde(default)]
+    auth: Option<AuthRule>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthRule {
+    max_validity_ledgers: u32,
 }
 
 #[derive(Deserialize)]
@@ -123,6 +131,7 @@ pub struct Policy {
     assets: BTreeMap<String, Limits>,
     destinations: Option<Vec<String>>,
     contracts: BTreeMap<String, Vec<String>>,
+    auth_max_ledgers: Option<u32>,
 }
 
 /// The result of judging an intent.
@@ -237,12 +246,105 @@ impl Policy {
             assets,
             destinations: f.destinations.map(|d| d.allow),
             contracts,
+            auth_max_ledgers: f.auth.map(|a| a.max_validity_ledgers),
         })
     }
 
     /// The network name or passphrase the policy was written for.
     pub fn network(&self) -> &str {
         &self.network
+    }
+
+    /// Judges a Soroban authorization entry for the group account `account`.
+    ///
+    /// `latest_ledger` is the network's current ledger, used to bound how
+    /// long the signature stays valid. Every call in the invocation tree must
+    /// be allowed by the contract and token rules, and token transfers count
+    /// toward the same limits as payments.
+    pub fn evaluate_auth(
+        &self,
+        intent: &AuthIntent,
+        account: &str,
+        latest_ledger: u32,
+        spent_today: impl Fn(&str) -> i128,
+    ) -> Decision {
+        let mut d = Decision::default();
+        let mut deny = |msg: String| d.violations.push(msg);
+        let Some(max) = self.auth_max_ledgers else {
+            deny("this policy does not allow signing authorization entries (add an [auth] section)".into());
+            return d;
+        };
+        if intent.address != account {
+            deny(format!("entry authorizes {}, not the group account", intent.address));
+        }
+        if intent.expiration_ledger <= latest_ledger {
+            deny("authorization has already expired".into());
+        } else if intent.expiration_ledger.saturating_sub(latest_ledger) > max {
+            deny(format!(
+                "authorization is valid for {} ledgers, more than max_validity_ledgers {max}",
+                intent.expiration_ledger.saturating_sub(latest_ledger)
+            ));
+        }
+        let mut spend: BTreeMap<String, i128> = BTreeMap::new();
+        for (i, call) in intent.calls.iter().enumerate() {
+            match call {
+                AuthCall::CreateContract => {
+                    if !self.operations.iter().any(|o| o == "create_contract") {
+                        deny(format!("call {i}: deploying contracts is not allowed"));
+                    }
+                }
+                AuthCall::Contract { contract, function, transfer } => match self.contracts.get(contract) {
+                    None => deny(format!("call {i}: contract {contract} is not allowed")),
+                    Some(fns) if !fns.iter().any(|f| f == function || f == "*") => {
+                        deny(format!("call {i}: function {function} of {contract} is not allowed"))
+                    }
+                    Some(_) => {
+                        if let (Some(t), true) = (transfer, self.assets.contains_key(contract)) {
+                            if t.from != account {
+                                deny(format!("call {i}: transfer moves tokens from {}, not the group account", t.from));
+                            }
+                            if let Some(allow) = &self.destinations
+                                && !allow.iter().any(|a| a == &t.to)
+                            {
+                                deny(format!("call {i}: destination {} is not on the allowlist", t.to));
+                            }
+                            let e = spend.entry(contract.clone()).or_default();
+                            *e = e.saturating_add(t.amount);
+                        }
+                    }
+                },
+            }
+        }
+        self.check_limits(&spend, &spent_today, &mut deny);
+        d.spend = spend;
+        d
+    }
+
+    fn check_limits(
+        &self,
+        spend: &BTreeMap<String, i128>,
+        spent_today: &dyn Fn(&str) -> i128,
+        deny: &mut dyn FnMut(String),
+    ) {
+        for (asset, amount) in spend {
+            let Some(limits) = self.assets.get(asset) else { continue };
+            let fmt = |v: i128| format_units(v, limits.decimals);
+            if *amount > limits.per_transaction {
+                deny(format!(
+                    "spends {} {asset}, more than per_transaction {}",
+                    fmt(*amount),
+                    fmt(limits.per_transaction)
+                ));
+            }
+            let total = spent_today(asset).saturating_add(*amount);
+            if total > limits.per_day {
+                deny(format!(
+                    "would bring 24h spend of {asset} to {}, more than per_day {}",
+                    fmt(total),
+                    fmt(limits.per_day)
+                ));
+            }
+        }
     }
 
     /// Judges `intent` for the group account `account` at unix time `now`.
@@ -327,25 +429,7 @@ impl Policy {
             }
         }
 
-        for (asset, amount) in &spend {
-            let Some(limits) = self.assets.get(asset) else { continue };
-            let fmt = |v: i128| format_units(v, limits.decimals);
-            if *amount > limits.per_transaction {
-                deny(format!(
-                    "spends {} {asset}, more than per_transaction {}",
-                    fmt(*amount),
-                    fmt(limits.per_transaction)
-                ));
-            }
-            let total = spent_today(asset).saturating_add(*amount);
-            if total > limits.per_day {
-                deny(format!(
-                    "would bring 24h spend of {asset} to {}, more than per_day {}",
-                    fmt(total),
-                    fmt(limits.per_day)
-                ));
-            }
-        }
+        self.check_limits(&spend, &spent_today, &mut deny);
         d.spend = spend;
         d
     }

@@ -2,7 +2,8 @@
 
 use stellar_xdr::{
     AccountId, Asset, FeeBumpTransactionInnerTx, HostFunction, MuxedAccount, Operation, OperationBody, Preconditions,
-    PublicKey, ScAddress, ScVal, Transaction, TransactionEnvelope, TransactionV0, Uint256,
+    PublicKey, ScAddress, ScVal, SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanAuthorizedInvocation,
+    SorobanCredentials, Transaction, TransactionEnvelope, TransactionV0, Uint256,
 };
 
 /// Everything a policy looks at.
@@ -172,6 +173,65 @@ fn op(o: &Operation, tx_source: &str) -> Op {
         body => OpKind::Other(snake(body.name())),
     };
     Op { source, kind }
+}
+
+/// What a Soroban authorization entry would let a contract do on the group's behalf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthIntent {
+    /// The authorizing address (`G…` or `C…`).
+    pub address: String,
+    /// Last ledger the signature is valid for.
+    pub expiration_ledger: u32,
+    /// Every authorized call in the invocation tree, depth first.
+    pub calls: Vec<AuthCall>,
+}
+
+/// One node of an authorization entry's invocation tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthCall {
+    /// A contract function call.
+    Contract {
+        /// Contract address.
+        contract: String,
+        /// Function name.
+        function: String,
+        /// Decoded SEP-41 transfer arguments, if it is one.
+        transfer: Option<TokenTransfer>,
+    },
+    /// Deploying a contract.
+    CreateContract,
+}
+
+impl AuthIntent {
+    /// Extracts the intent of an entry with address credentials; `None` otherwise.
+    pub fn from_entry(entry: &SorobanAuthorizationEntry) -> Option<Self> {
+        let SorobanCredentials::Address(creds) = &entry.credentials else { return None };
+        let address = match &creds.address {
+            ScAddress::Account(a) => account_id(a),
+            ScAddress::Contract(c) => c.to_string(),
+            _ => return None,
+        };
+        let mut calls = Vec::new();
+        walk(&entry.root_invocation, &mut calls);
+        Some(Self { address, expiration_ledger: creds.signature_expiration_ledger, calls })
+    }
+}
+
+fn walk(inv: &SorobanAuthorizedInvocation, out: &mut Vec<AuthCall>) {
+    out.push(match &inv.function {
+        SorobanAuthorizedFunction::ContractFn(args) => match &args.contract_address {
+            ScAddress::Contract(id) => {
+                let function = String::from_utf8_lossy(args.function_name.0.as_slice()).into_owned();
+                let transfer = if function == "transfer" { token_transfer(&args.args) } else { None };
+                AuthCall::Contract { contract: id.to_string(), function, transfer }
+            }
+            other => AuthCall::Contract { contract: format!("{other:?}"), function: String::new(), transfer: None },
+        },
+        _ => AuthCall::CreateContract,
+    });
+    for sub in inv.sub_invocations.iter() {
+        walk(sub, out);
+    }
 }
 
 fn address(v: &ScVal) -> Option<String> {
