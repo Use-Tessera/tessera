@@ -156,7 +156,10 @@ fn describe(intent: &Intent) -> String {
             OpKind::CreateAccount { destination, starting_balance } => {
                 format!("create {destination} with {} native", format_amount(i128::from(*starting_balance)))
             }
-            OpKind::InvokeContract { contract, function } => format!("call {contract}.{function}()"),
+            OpKind::InvokeContract { contract, transfer: Some(t), .. } => {
+                format!("transfer {} units of token {contract} from {} to {}", t.amount, t.from, t.to)
+            }
+            OpKind::InvokeContract { contract, function, .. } => format!("call {contract}.{function}()"),
             OpKind::Other(name) => name.clone(),
         };
         let on_behalf = op.source.as_ref().map(|s| format!("  [as {s}]")).unwrap_or_default();
