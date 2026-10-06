@@ -172,3 +172,69 @@ fn clone_state(s: &dkg::Round1State) -> dkg::Round1State {
         State::Round2(_) => unreachable!(),
     }
 }
+
+/// Refreshes `shares`, sealing and reopening each state between steps as the CLI does.
+fn refresh(shares: &[KeyShare]) -> Result<Vec<KeyShare>, Error> {
+    let n = u16::try_from(shares.len()).unwrap();
+    let (states, round1): (Vec<_>, Vec<_>) = shares.iter().map(|s| dkg::start_refresh(s, n).unwrap()).unzip();
+    let mut round2 = Vec::new();
+    let mut next = Vec::new();
+    for s in &states {
+        let (state, out) = dkg::exchange(clone_state(s), &round1)?;
+        let State::Round2(state) = state.seal(b"x", FAST)?.open(b"x")? else { unreachable!() };
+        next.push(state);
+        round2.extend(out);
+    }
+    next.into_iter().map(|s| dkg::finish(s, &round2)).collect()
+}
+
+fn cannot_sign(shares: &[KeyShare]) {
+    let hash = [5u8; 32];
+    if let Ok(sig) = signing::sign_message_locally(&hash, shares) {
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&shares[0].group_public_key()).unwrap();
+        assert!(key.verify_strict(&hash, &ed25519_dalek::Signature::from_bytes(&sig)).is_err());
+    }
+}
+
+#[test]
+fn refresh_keeps_the_account_and_retires_old_shares() {
+    let old = keys_from_dealer(2, 3);
+    let new = refresh(&old).unwrap();
+    assert!(new.iter().all(|s| s.account() == old[0].account() && s.threshold() == 2));
+    signs(&new[..2]);
+    signs(&new[1..]);
+    // A share that leaked before the refresh is useless with one from after it.
+    cannot_sign(&[old[0].clone(), new[1].clone()]);
+    cannot_sign(&[new[0].clone(), old[2].clone()]);
+}
+
+#[test]
+fn refresh_can_drop_a_participant() {
+    let old = ceremony(2, 3, |m| m).unwrap();
+    let kept = refresh(&old[..2]).unwrap();
+    signs(&kept);
+    assert_eq!(kept[0].account(), old[0].account());
+    // The dropped participant's share no longer combines with anyone's.
+    cannot_sign(&[kept[0].clone(), old[2].clone()]);
+    cannot_sign(&[old[2].clone(), kept[1].clone()]);
+}
+
+#[test]
+fn refresh_and_new_key_messages_do_not_mix() {
+    let old = keys_from_dealer(2, 2);
+    let (s, _) = dkg::start_refresh(&old[0], 2).unwrap();
+    let (_, fresh) = dkg::start(2, 2, 2).unwrap();
+    assert!(matches!(dkg::exchange(s, &[fresh]), Err(Error::Dkg(ref e)) if e.contains("generating a new key")));
+
+    let other = keys_from_dealer(2, 2);
+    let (s, _) = dkg::start_refresh(&old[0], 2).unwrap();
+    let (_, foreign) = dkg::start_refresh(&other[1], 2).unwrap();
+    assert!(matches!(dkg::exchange(s, &[foreign]), Err(Error::Dkg(ref e)) if e.contains("refreshing")));
+
+    assert!(matches!(dkg::start_refresh(&old[0], 1), Err(Error::Dkg(_))));
+    assert!(matches!(dkg::start_refresh(&old[0], 3), Err(Error::Dkg(_))));
+}
+
+fn keys_from_dealer(t: u16, n: u16) -> Vec<KeyShare> {
+    tessera_core::keys::deal(t, n).unwrap()
+}

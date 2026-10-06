@@ -57,6 +57,9 @@ pub struct Round1Message {
     pub package: String,
     /// X25519 public key that round-2 packages for the sender are encrypted to, hex.
     pub encryption_key: String,
+    /// For a share refresh, the group account whose shares are refreshed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<String>,
 }
 
 /// Sent by one participant to one other after [`exchange`].
@@ -80,6 +83,7 @@ pub struct Round1State {
     secret: round1::SecretPackage,
     dh: StaticSecret,
     message: Round1Message,
+    old: Option<KeyShare>,
 }
 
 /// A participant's secret state between [`exchange`] and [`finish`].
@@ -87,6 +91,7 @@ pub struct Round2State {
     secret: round2::SecretPackage,
     dh: StaticSecret,
     round1: Vec<Round1Message>,
+    old: Option<KeyShare>,
 }
 
 /// Step 1: participant `index` (1-based) of a `threshold`-of-`signers` group.
@@ -99,18 +104,47 @@ pub fn start(index: u16, threshold: u16, signers: u16) -> Result<(Round1State, R
     }
     let id = Identifier::try_from(index)?;
     let (secret, package) = fdkg::part1(id, signers, threshold, rand_core::OsRng)?;
+    begin(secret, package, threshold, signers, None)
+}
+
+/// Step 1 of a proactive refresh: `participants` holders of `share`'s group
+/// (all of them, or at least the threshold to drop the others) re-randomise
+/// their shares. The group key stays the same, and shares from before the
+/// refresh no longer combine with shares from after it, so a share that
+/// leaked earlier becomes useless once every participant has refreshed.
+pub fn start_refresh(share: &KeyShare, participants: u16) -> Result<(Round1State, Round1Message), Error> {
+    let threshold = share.threshold();
+    if participants < threshold || usize::from(participants) > share.signers() {
+        return Err(Error::Dkg(format!(
+            "a refresh needs between {threshold} and {} participants, got {participants}",
+            share.signers()
+        )));
+    }
+    let (secret, package) =
+        frost_ed25519::keys::refresh::refresh_dkg_part1(share.identifier(), participants, threshold, rand_core::OsRng)?;
+    begin(secret, package, threshold, participants, Some(share.clone()))
+}
+
+fn begin(
+    secret: round1::SecretPackage,
+    package: round1::Package,
+    threshold: u16,
+    signers: u16,
+    old: Option<KeyShare>,
+) -> Result<(Round1State, Round1Message), Error> {
     let mut seed = Zeroizing::new([0u8; 32]);
     getrandom::fill(&mut *seed).map_err(|_| Error::Randomness)?;
     let dh = StaticSecret::from(*seed);
     let message = Round1Message {
         format: ROUND1_FORMAT.into(),
-        identifier: hex::encode(id.serialize()),
+        identifier: hex::encode(secret.identifier().serialize()),
         threshold,
         signers,
         package: hex::encode(package.serialize()?),
         encryption_key: hex::encode(PublicKey::from(&dh).as_bytes()),
+        refresh: old.as_ref().map(KeyShare::account),
     };
-    Ok((Round1State { secret, dh, message: message.clone() }, message))
+    Ok((Round1State { secret, dh, message: message.clone(), old }, message))
 }
 
 /// SHA-256 over the full set of round-1 messages, in identifier order.
@@ -135,7 +169,10 @@ pub fn exchange(state: Round1State, round1: &[Round1Message]) -> Result<(Round2S
     let all = complete_round1(&state.message, round1)?;
     let me = parse_identifier(&state.message.identifier)?;
     let others = round1_packages(&all, me)?;
-    let (secret, outgoing) = fdkg::part2(state.secret, &others)?;
+    let (secret, outgoing) = match state.old {
+        Some(_) => frost_ed25519::keys::refresh::refresh_dkg_part2(state.secret, &others)?,
+        None => fdkg::part2(state.secret, &others)?,
+    };
 
     let mut messages = Vec::with_capacity(outgoing.len());
     for (to, package) in outgoing {
@@ -155,7 +192,7 @@ pub fn exchange(state: Round1State, round1: &[Round1Message]) -> Result<(Round2S
             ciphertext: hex::encode(ciphertext),
         });
     }
-    Ok((Round2State { secret, dh: state.dh, round1: all }, messages))
+    Ok((Round2State { secret, dh: state.dh, round1: all, old: state.old }, messages))
 }
 
 /// Step 3: given round-2 messages (those for other participants are ignored),
@@ -193,8 +230,22 @@ pub fn finish(state: Round2State, round2: &[Round2Message]) -> Result<KeyShare, 
         return Err(Error::Dkg(format!("expected {expected} round-2 messages for {mine}, got {}", packages.len())));
     }
     let round1 = round1_packages(&state.round1, me)?;
-    let (key_package, public_key_package) = fdkg::part3(&state.secret, &round1, &packages)?;
-    Ok(KeyShare::new(key_package, public_key_package))
+    let Some(old) = state.old else {
+        let (key_package, public_key_package) = fdkg::part3(&state.secret, &round1, &packages)?;
+        return Ok(KeyShare::new(key_package, public_key_package));
+    };
+    let (key_package, public_key_package) = frost_ed25519::keys::refresh::refresh_dkg_shares(
+        &state.secret,
+        &round1,
+        &packages,
+        old.public_key_package().clone(),
+        old.key_package().clone(),
+    )?;
+    let share = KeyShare::new(key_package, public_key_package);
+    if share.account() != old.account() {
+        return Err(Error::Dkg("the refresh changed the group key".into()));
+    }
+    Ok(share)
 }
 
 /// Checks the round-1 set is complete and consistent and that this
@@ -205,6 +256,14 @@ fn complete_round1(own: &Round1Message, given: &[Round1Message]) -> Result<Vec<R
     for m in given {
         if m.format != ROUND1_FORMAT {
             return Err(Error::Dkg(format!("unknown round-1 format {:?}", m.format)));
+        }
+        if m.refresh != own.refresh {
+            return Err(Error::Dkg(format!(
+                "{} is {}, this participant is {}",
+                m.identifier,
+                describe(m.refresh.as_deref()),
+                describe(own.refresh.as_deref())
+            )));
         }
         if m.threshold != own.threshold || m.signers != own.signers {
             return Err(Error::Dkg(format!(
@@ -228,6 +287,10 @@ fn complete_round1(own: &Round1Message, given: &[Round1Message]) -> Result<Vec<R
         return Err(Error::Dkg(format!("expected {} round-1 messages, got {}", own.signers, all.len())));
     }
     Ok(all.into_values().collect())
+}
+
+fn describe(refresh: Option<&str>) -> String {
+    refresh.map_or_else(|| "generating a new key".into(), |account| format!("refreshing {account}"))
 }
 
 fn round1_packages(all: &[Round1Message], me: Identifier) -> Result<BTreeMap<Identifier, round1::Package>, Error> {
@@ -306,6 +369,26 @@ struct StateBody {
     message: Option<Round1Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     round1: Vec<Round1Message>,
+    /// For a refresh: the share being replaced, as hex `KeyPackage` and `PublicKeyPackage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    old: Option<[String; 2]>,
+}
+
+fn encode_old(old: Option<&KeyShare>) -> Result<Option<[String; 2]>, Error> {
+    old.map(|s| Ok([hex::encode(s.key_package().serialize()?), hex::encode(s.public_key_package().serialize()?)]))
+        .transpose()
+}
+
+fn decode_old(old: Option<[String; 2]>) -> Result<Option<KeyShare>, Error> {
+    old.map(|[key, public]| {
+        let hx = |s: &str| hex::decode(s).map_err(|e| Error::malformed("DKG state", e));
+        let key = Zeroizing::new(hx(&key)?);
+        Ok(KeyShare::new(
+            frost_ed25519::keys::KeyPackage::deserialize(&key)?,
+            frost_ed25519::keys::PublicKeyPackage::deserialize(&hx(&public)?)?,
+        ))
+    })
+    .transpose()
 }
 
 impl Round1State {
@@ -321,6 +404,7 @@ impl Round1State {
             dh: hex::encode(self.dh.to_bytes()),
             message: Some(self.message.clone()),
             round1: Vec::new(),
+            old: encode_old(self.old.as_ref())?,
         };
         StateFile::seal(1, &self.message.identifier, &body, passphrase, kdf)
     }
@@ -334,6 +418,7 @@ impl Round2State {
             dh: hex::encode(self.dh.to_bytes()),
             message: None,
             round1: self.round1.clone(),
+            old: encode_old(self.old.as_ref())?,
         };
         StateFile::seal(2, &hex::encode(self.secret.identifier().serialize()), &body, passphrase, kdf)
     }
@@ -380,14 +465,19 @@ impl StateFile {
             .and_then(|b| b.try_into().ok())
             .ok_or_else(|| Error::malformed("DKG state", "bad X25519 secret"))?;
         let dh = StaticSecret::from(dh);
+        let old = decode_old(body.old)?;
         match (self.step, body.message) {
-            (1, Some(message)) => {
-                Ok(State::Round1(Round1State { secret: round1::SecretPackage::deserialize(&secret)?, dh, message }))
-            }
+            (1, Some(message)) => Ok(State::Round1(Round1State {
+                secret: round1::SecretPackage::deserialize(&secret)?,
+                dh,
+                message,
+                old,
+            })),
             (2, None) => Ok(State::Round2(Round2State {
                 secret: round2::SecretPackage::deserialize(&secret)?,
                 dh,
                 round1: body.round1,
+                old,
             })),
             _ => Err(Error::malformed("DKG state", "step and contents disagree")),
         }
