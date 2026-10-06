@@ -422,3 +422,73 @@ async fn metrics_count_sessions_and_decisions() {
         assert!(text.contains(want), "missing {want}:\n{text}");
     }
 }
+
+/// A signer whose latest ledger comes from `source` rather than the coordinator.
+fn signer_with_ledger(
+    share: &KeyShare,
+    dir: &std::path::Path,
+    source: impl Fn() -> Result<u32, String> + Send + Sync + 'static,
+) -> Router {
+    let ledger = SpendLedger::open(&dir.join("spend.jsonl")).unwrap();
+    let signer = Signer::new(share.clone(), Network::from_name("testnet"), POLICY, Some(TOKEN.into()), ledger)
+        .unwrap()
+        .with_clock(|| NOW)
+        .with_ledger_source(source);
+    router(Arc::new(signer))
+}
+
+#[tokio::test]
+async fn a_signer_with_its_own_rpc_ignores_the_coordinators_ledger() {
+    let shares = keys::deal(2, 2).unwrap();
+    let key = shares[0].group_public_key();
+    let entry = auth_entry(key, 5, 1_060);
+    let dir = tempfile::tempdir().unwrap();
+    for (source, status, why) in [
+        // The coordinator understates the ledger (5); the signer's RPC says 1000.
+        (Ok(1_000), StatusCode::OK, ""),
+        // RPC says the entry has already expired, whatever the coordinator claims.
+        (Ok(5_000), StatusCode::FORBIDDEN, "already expired"),
+        // No RPC, no signature.
+        (Err("connection refused".to_owned()), StatusCode::SERVICE_UNAVAILABLE, "reading the latest ledger"),
+    ] {
+        let r = signer_with_ledger(&shares[0], dir.path(), move || source.clone());
+        let peer = signer_with_ledger(&shares[1], dir.path(), || Ok(1_000));
+        let mut commitments = BTreeMap::new();
+        for router in [&r, &peer] {
+            let (_, v) = post(router, "/v1/round1", json!({ "session": "s" })).await;
+            commitments.insert(v["identifier"].as_str().unwrap().to_owned(), v["commitments"].clone());
+        }
+        let body = json!({ "session": "s", "auth_entry": entry, "latest_ledger": 5, "commitments": commitments });
+        let (st, v) = post(&r, "/v1/round2/auth", body).await;
+        assert_eq!(st, status, "{v}");
+        assert!(v.to_string().contains(why), "{v}");
+    }
+}
+
+#[test]
+fn rpc_client_reads_the_sequence() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        for reply in [r#"{"jsonrpc":"2.0","id":1,"result":{"id":"ab","protocolVersion":23,"sequence":812350}}"#, "{}"] {
+            let (mut conn, _) = listener.accept().unwrap();
+            // Read until the JSON body has arrived; headers may come first.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !String::from_utf8_lossy(&request).contains("getLatestLedger") {
+                let n = conn.read(&mut buf).unwrap();
+                assert!(n > 0, "connection closed before the request body");
+                request.extend_from_slice(&buf[..n]);
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            conn.write_all(resp.as_bytes()).unwrap();
+        }
+    });
+    assert_eq!(tessera_signer::rpc::latest_ledger(&url), Ok(812_350));
+    assert!(tessera_signer::rpc::latest_ledger(&url).unwrap_err().contains("no sequence"));
+    server.join().unwrap();
+}

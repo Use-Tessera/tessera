@@ -50,8 +50,18 @@ async fn run(args: Args) -> Result<(), String> {
     };
     std::fs::create_dir_all(&cfg.state_dir).map_err(|e| format!("creating {}: {e}", cfg.state_dir.display()))?;
     let ledger = SpendLedger::open(&cfg.state_dir.join("spend.jsonl")).map_err(|e| format!("opening ledger: {e}"))?;
-    let signer = Signer::new(share, Network::from_name(&cfg.network), &read(&cfg.policy)?, token, ledger)?
+    let mut signer = Signer::new(share, Network::from_name(&cfg.network), &read(&cfg.policy)?, token, ledger)?
         .with_decision_log(DecisionLog::new(&cfg.state_dir.join("decisions.jsonl")));
+    if let Some(url) = cfg.rpc.clone() {
+        let seq = tokio::task::spawn_blocking({
+            let url = url.clone();
+            move || tessera_signer::rpc::latest_ledger(&url)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        tracing::info!(rpc = url, latest_ledger = seq, "reading the latest ledger from rpc");
+        signer = signer.with_ledger_source(move || tessera_signer::rpc::latest_ledger(&url));
+    }
 
     let listener =
         tokio::net::TcpListener::bind(&cfg.listen).await.map_err(|e| format!("binding {}: {e}", cfg.listen))?;

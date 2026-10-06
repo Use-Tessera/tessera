@@ -33,7 +33,11 @@ pub struct Signer {
     highest_ledger: AtomicU32,
     decisions: Option<DecisionLog>,
     metrics: Metrics,
+    ledger_source: Option<LedgerSource>,
 }
+
+/// Where a signer reads the network's latest ledger. Called on a blocking thread.
+pub type LedgerSource = Arc<dyn Fn() -> Result<u32, String> + Send + Sync>;
 
 /// Counters served at `/metrics`.
 #[derive(Default)]
@@ -107,7 +111,15 @@ impl Signer {
             highest_ledger: AtomicU32::new(0),
             decisions: None,
             metrics: Metrics::default(),
+            ledger_source: None,
         })
+    }
+
+    /// Reads the latest ledger from `source`, typically the signer's own RPC,
+    /// instead of trusting the coordinator's. Failing to read it fails closed.
+    pub fn with_ledger_source(mut self, source: impl Fn() -> Result<u32, String> + Send + Sync + 'static) -> Self {
+        self.ledger_source = Some(Arc::new(source));
+        self
     }
 
     /// Records every approval and refusal to `log`.
@@ -296,28 +308,43 @@ async fn aggregate(State(s): State<Arc<Signer>>, Json(req): Json<AggregateReques
 
 /// Signs a share over a Soroban authorization entry if the policy allows it.
 ///
-/// The coordinator supplies the network's latest ledger. A signer cannot check
-/// it on its own, so it only accepts values that never fall more than about a
-/// day behind the highest it has seen; see docs/security-model.md.
+/// The authorization's lifetime is bounded by the network's latest ledger. A
+/// signer with its own RPC reads it there and ignores the coordinator's value.
+/// Otherwise it takes the coordinator's, but only values that never fall more
+/// than about a day behind the highest it has seen; see docs/security-model.md.
 async fn round2_auth(State(s): State<Arc<Signer>>, Json(req): Json<AuthRound2Request>) -> ApiResult<Round2Response> {
     let nonces = s
         .nonces
         .take(&req.session)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired session"))?;
     let entry = auth::decode_entry(&req.auth_entry)?;
-    let seen = s.highest_ledger.fetch_max(req.latest_ledger, Ordering::SeqCst);
-    if req.latest_ledger.saturating_add(STALE_LEDGERS) < seen {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            format!("latest_ledger {} is stale (seen {seen})", req.latest_ledger),
-        ));
-    }
+    let latest = match s.ledger_source.clone() {
+        Some(source) => {
+            let own = tokio::task::spawn_blocking(move || source())
+                .await
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?
+                .map_err(|e| {
+                    ApiError::new(StatusCode::SERVICE_UNAVAILABLE, format!("reading the latest ledger: {e}"))
+                })?;
+            s.highest_ledger.fetch_max(own, Ordering::SeqCst);
+            own
+        }
+        None => {
+            let seen = s.highest_ledger.fetch_max(req.latest_ledger, Ordering::SeqCst);
+            if req.latest_ledger.saturating_add(STALE_LEDGERS) < seen {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("latest_ledger {} is stale (seen {seen})", req.latest_ledger),
+                ));
+            }
+            req.latest_ledger
+        }
+    };
     let intent = AuthIntent::from_entry(&entry)
         .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "only address-credential entries can be signed"))?;
     let now = (s.clock)();
-    let decision = s
-        .policy
-        .evaluate_auth(&intent, &s.share.account(), req.latest_ledger, |asset| s.ledger.spent_since(asset, now));
+    let decision =
+        s.policy.evaluate_auth(&intent, &s.share.account(), latest, |asset| s.ledger.spent_since(asset, now));
     let hash = auth::payload_hash(&s.network, &entry)?;
     let tag = hex::encode(hash);
     s.decide("authorization", &hash, &decision.violations);

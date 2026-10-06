@@ -20,9 +20,12 @@ allow = [
   "Apache-2.0",
   "MIT",
   "BSD-3-Clause",
+  "ISC",
   "Unicode-3.0",
   "Zlib",
 ]
+# Mozilla's root certificates, used to reach a Stellar RPC over TLS.
+exceptions = [{ allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" }]
 
 [bans]
 multiple-versions = "warn"

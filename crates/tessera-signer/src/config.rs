@@ -22,6 +22,11 @@ pub struct Config {
     /// Leave unset only for local experiments.
     #[serde(default)]
     pub token_env: Option<String>,
+    /// Stellar RPC this signer reads the latest ledger from when signing
+    /// authorization entries. Without it, the coordinator's value is trusted
+    /// within limits.
+    #[serde(default)]
+    pub rpc: Option<String>,
 }
 
 impl Config {
