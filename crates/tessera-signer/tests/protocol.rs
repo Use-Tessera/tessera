@@ -391,3 +391,34 @@ async fn every_decision_is_logged_by_the_signer() {
     assert!(log[0].approved && log[0].kind == "transaction" && log[0].violations.is_empty());
     assert!(!log[1].approved && log[1].violations[0].contains("per_transaction"));
 }
+
+#[tokio::test]
+async fn metrics_count_sessions_and_decisions() {
+    let g = group();
+    let key = g.shares[0].group_public_key();
+    for (session, xlm) in [("a", 1), ("b", 150)] {
+        let commitments = round1(&g, &[0, 1], session).await;
+        let body = json!({ "session": session, "envelope": payment(key, xlm), "commitments": commitments });
+        post(&g.routers[0], "/v1/round2", body).await;
+    }
+    let get = |token: Option<&str>| {
+        let mut req = Request::get("/metrics");
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        g.routers[0].clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    assert_eq!(get(None).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    let resp = get(Some(TOKEN)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = String::from_utf8(resp.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    for want in [
+        "tessera_signer_sessions_total 2",
+        r#"tessera_signer_decisions_total{kind="transaction",outcome="approved"} 1"#,
+        r#"tessera_signer_decisions_total{kind="transaction",outcome="refused"} 1"#,
+        r#"tessera_signer_decisions_total{kind="authorization",outcome="approved"} 0"#,
+        "tessera_signer_open_sessions 0",
+    ] {
+        assert!(text.contains(want), "missing {want}:\n{text}");
+    }
+}

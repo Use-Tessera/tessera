@@ -8,8 +8,9 @@
 //! | `POST /v1/aggregate` | Combine shares (public data only) |
 //! | `POST /v1/round2/auth` | A signature share over a Soroban authorization entry, if the policy allows it |
 //! | `POST /v1/aggregate/auth` | Combine shares into a signed authorization entry |
+//! | `GET /metrics` | Prometheus counters: sessions, and decisions by kind and outcome |
 //!
-//! Every `/v1` route requires `Authorization: Bearer <token>` when a token is
+//! Every `/v1` route and `/metrics` require `Authorization: Bearer <token>` when a token is
 //! configured. `GET /healthz` is open. Bodies are capped at 256 KB and requests
 //! at 30 seconds.
 

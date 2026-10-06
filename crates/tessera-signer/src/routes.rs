@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -32,6 +32,47 @@ pub struct Signer {
     clock: Box<dyn Fn() -> u64 + Send + Sync>,
     highest_ledger: AtomicU32,
     decisions: Option<DecisionLog>,
+    metrics: Metrics,
+}
+
+/// Counters served at `/metrics`.
+#[derive(Default)]
+struct Metrics {
+    sessions: AtomicU64,
+    // [transaction, authorization] × [approved, refused]
+    decisions: [[AtomicU64; 2]; 2],
+}
+
+impl Metrics {
+    fn render(&self, s: &Signer) -> String {
+        let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        let mut out = String::from(
+            "# HELP tessera_signer_sessions_total Round-1 sessions opened.\n\
+             # TYPE tessera_signer_sessions_total counter\n",
+        );
+        out.push_str(&format!("tessera_signer_sessions_total {}\n", n(&self.sessions)));
+        out.push_str(
+            "# HELP tessera_signer_decisions_total Policy decisions by payload kind and outcome.\n\
+             # TYPE tessera_signer_decisions_total counter\n",
+        );
+        for (k, kind) in ["transaction", "authorization"].iter().enumerate() {
+            for (o, outcome) in ["approved", "refused"].iter().enumerate() {
+                let v = self.decisions.get(k).and_then(|d| d.get(o)).map_or(0, n);
+                out.push_str(&format!("tessera_signer_decisions_total{{kind=\"{kind}\",outcome=\"{outcome}\"}} {v}\n"));
+            }
+        }
+        out.push_str(&format!(
+            "# HELP tessera_signer_open_sessions Sessions waiting for round 2.\n\
+             # TYPE tessera_signer_open_sessions gauge\n\
+             tessera_signer_open_sessions {}\n\
+             # HELP tessera_signer_highest_ledger Highest latest_ledger a coordinator has reported.\n\
+             # TYPE tessera_signer_highest_ledger gauge\n\
+             tessera_signer_highest_ledger {}\n",
+            s.nonces.len(),
+            s.highest_ledger.load(Ordering::Relaxed)
+        ));
+        out
+    }
 }
 
 /// How far behind the highest ledger seen a request's `latest_ledger` may be (about a day).
@@ -65,6 +106,7 @@ impl Signer {
             clock: Box::new(|| SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)),
             highest_ledger: AtomicU32::new(0),
             decisions: None,
+            metrics: Metrics::default(),
         })
     }
 
@@ -75,6 +117,11 @@ impl Signer {
     }
 
     fn decide(&self, kind: &str, hash: &[u8; 32], violations: &[String]) {
+        let k = usize::from(kind == "authorization");
+        let o = usize::from(!violations.is_empty());
+        if let Some(c) = self.metrics.decisions.get(k).and_then(|d| d.get(o)) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
         let Some(log) = &self.decisions else { return };
         let d = Decision {
             time: (self.clock)(),
@@ -109,6 +156,7 @@ pub fn router(signer: Arc<Signer>) -> Router {
         .route("/v1/aggregate", post(aggregate))
         .route("/v1/round2/auth", post(round2_auth))
         .route("/v1/aggregate/auth", post(aggregate_auth))
+        .route("/metrics", get(metrics))
         .route_layer(middleware::from_fn_with_state(signer.clone(), authorize))
         .with_state(signer);
     Router::new()
@@ -116,6 +164,11 @@ pub fn router(signer: Arc<Signer>) -> Router {
         .merge(api)
         .layer(middleware::from_fn(timeout))
         .layer(DefaultBodyLimit::max(MAX_BODY))
+}
+
+/// Prometheus counters. Behind the bearer token like the rest of the API.
+async fn metrics(State(s): State<Arc<Signer>>) -> Response {
+    ([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], s.metrics.render(&s)).into_response()
 }
 
 async fn timeout(req: Request, next: Next) -> Response {
@@ -191,6 +244,7 @@ async fn round1(State(s): State<Arc<Signer>>, Json(req): Json<Round1Request>) ->
         NonceError::Duplicate => ApiError::new(StatusCode::CONFLICT, "session already exists"),
         NonceError::Full => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "too many open sessions"),
     })?;
+    s.metrics.sessions.fetch_add(1, Ordering::Relaxed);
     Ok(Json(Round1Response {
         identifier: s.share.identifier_hex(),
         commitments: signing::encode_commitments(&commitments)?,

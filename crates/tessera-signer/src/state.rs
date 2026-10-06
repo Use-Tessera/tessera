@@ -48,6 +48,17 @@ impl Nonces {
         let mut map = self.0.lock().unwrap_or_else(|p| p.into_inner());
         map.remove(session).filter(|(_, at)| at.elapsed() < NONCE_TTL).map(|(n, _)| n)
     }
+
+    /// Sessions still waiting for round 2.
+    pub fn len(&self) -> usize {
+        let map = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        map.values().filter(|(_, at)| at.elapsed() < NONCE_TTL).count()
+    }
+
+    /// Whether no session is waiting for round 2.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Serialize, Deserialize)]
