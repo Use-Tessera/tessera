@@ -4,7 +4,7 @@
 #     -p 7401:7401 ghcr.io/use-tessera/tessera-signer
 #
 # /etc/tessera holds signer.toml, the share, the policy and state_dir.
-FROM rust:1.97-slim-bookworm AS build
+FROM rust:1.98-slim-bookworm AS build
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p tessera-signer --bin tessera-signer
