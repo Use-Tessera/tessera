@@ -135,3 +135,60 @@ fn wrong_passphrase_cannot_continue() {
         .code(2)
         .stderr(predicates::str::contains("wrong passphrase"));
 }
+
+#[test]
+fn refresh_keeps_the_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dealt = tmp.path().join("dealt");
+    let account = stdout(
+        tessera("pw")
+            .args(["keygen", "--insecure-fast-kdf", "--threshold", "2", "--signers", "2", "--out"])
+            .arg(&dealt),
+    );
+
+    let board = tmp.path().join("board");
+    std::fs::create_dir(&board).unwrap();
+    for i in 1..=2 {
+        let msg = stdout(
+            tessera("pw")
+                .args(["dkg", "start", "--insecure-fast-kdf", "--refresh"])
+                .arg(dealt.join(format!("share-{i}.json")))
+                .arg("--state")
+                .arg(tmp.path().join(format!("p{i}.state"))),
+        );
+        assert!(msg.contains(&account), "round-1 messages name the group being refreshed: {msg}");
+        std::fs::write(board.join(format!("round1-{i}.json")), msg).unwrap();
+    }
+    // --refresh and new-key parameters are mutually exclusive.
+    tessera("pw")
+        .args(["dkg", "start", "--index", "1", "--refresh"])
+        .arg(dealt.join("share-1.json"))
+        .args(["--state", "x"])
+        .assert()
+        .code(2);
+
+    let round1 = files(&board, "round1-");
+    let fingerprint = stdout(tessera("").args(["dkg", "fingerprint"]).args(&round1));
+    for i in 1..=2 {
+        stdout(
+            tessera("pw")
+                .args(["dkg", "exchange", "--fingerprint", &fingerprint, "--state"])
+                .arg(tmp.path().join(format!("p{i}.state")))
+                .arg("--out")
+                .arg(&board)
+                .args(&round1),
+        );
+    }
+    let round2 = files(&board, "round2-");
+    for i in 1..=2 {
+        let refreshed = stdout(
+            tessera("pw")
+                .args(["dkg", "finish", "--state"])
+                .arg(tmp.path().join(format!("p{i}.state")))
+                .arg("--out")
+                .arg(tmp.path().join(format!("refreshed-{i}.json")))
+                .args(&round2),
+        );
+        assert_eq!(refreshed, account);
+    }
+}

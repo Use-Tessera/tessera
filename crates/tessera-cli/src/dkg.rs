@@ -9,13 +9,16 @@
 //! tessera dkg exchange --state p1.state --fingerprint <hex> --out round2/ round1-*.json
 //! tessera dkg finish --state p1.state --out share.json round2/*.json
 //! ```
+//!
+//! A proactive refresh runs the same steps, starting from the current share:
+//! `tessera dkg start --refresh share.json --state p1.state`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Subcommand;
 use tessera_core::dkg::{self, Round1Message, Round2Message, State, StateFile};
-use tessera_core::keys::KdfParams;
+use tessera_core::keys::{KdfParams, ShareFile};
 
 use crate::{passphrase, read, write_new};
 
@@ -24,14 +27,23 @@ pub enum Step {
     /// Step 1: create this participant's secret state and print its round-1 message.
     Start {
         /// This participant's position, 1 to `--signers`. Every participant needs a different one.
-        #[arg(long)]
-        index: u16,
+        #[arg(long, required_unless_present = "refresh", conflicts_with = "refresh")]
+        index: Option<u16>,
         /// Signatures required.
-        #[arg(long)]
-        threshold: u16,
+        #[arg(long, required_unless_present = "refresh", conflicts_with = "refresh")]
+        threshold: Option<u16>,
         /// Participants.
+        #[arg(long, required_unless_present = "refresh", conflicts_with = "refresh")]
+        signers: Option<u16>,
+        /// Refresh this existing share instead of generating a new key. The group
+        /// account stays the same; shares from before the refresh stop working
+        /// with shares from after it.
         #[arg(long)]
-        signers: u16,
+        refresh: Option<PathBuf>,
+        /// With `--refresh`: how many holders take part. Defaults to all of
+        /// them; fewer (but at least the threshold) drops the others.
+        #[arg(long, requires = "refresh")]
+        participants: Option<u16>,
         /// Where to keep the encrypted state between steps.
         #[arg(long)]
         state: PathBuf,
@@ -76,15 +88,32 @@ pub enum Step {
 
 pub fn run(step: Step) -> Result<ExitCode, String> {
     match step {
-        Step::Start { index, threshold, signers, state, insecure_fast_kdf } => {
-            let kdf =
+        Step::Start { index, threshold, signers, refresh, participants, state, insecure_fast_kdf } => {
+            let mut kdf =
                 if insecure_fast_kdf { KdfParams { m_cost: 64, t_cost: 1, p_cost: 1 } } else { KdfParams::default() };
             let pass = passphrase()?;
-            let (s, message) = dkg::start(index, threshold, signers).map_err(|e| e.to_string())?;
+            let (s, message, what) = match refresh {
+                Some(path) => {
+                    let file = ShareFile::from_json(&read(&path)?).map_err(|e| e.to_string())?;
+                    let share = file.open(pass.as_bytes()).map_err(|e| e.to_string())?;
+                    let n = participants.unwrap_or(file.header.signers.try_into().unwrap_or(u16::MAX));
+                    if !insecure_fast_kdf {
+                        kdf = file.secret.kdf;
+                    }
+                    let (s, m) = dkg::start_refresh(&share, n).map_err(|e| e.to_string())?;
+                    (s, m, format!("refreshing {} with {n} participants", share.account()))
+                }
+                None => {
+                    let (index, threshold, signers) =
+                        (index.unwrap_or(0), threshold.unwrap_or(0), signers.unwrap_or(0));
+                    let (s, m) = dkg::start(index, threshold, signers).map_err(|e| e.to_string())?;
+                    (s, m, format!("participant {index} of {signers}"))
+                }
+            };
             let file = s.seal(pass.as_bytes(), kdf).map_err(|e| e.to_string())?;
             write_new(&state, &file.to_json().map_err(|e| e.to_string())?)?;
             println!("{}", json(&message)?);
-            eprintln!("participant {index} of {signers}: send this round-1 message to every other participant");
+            eprintln!("{what}: send this round-1 message to every other participant");
             Ok(ExitCode::SUCCESS)
         }
         Step::Fingerprint { round1 } => {
