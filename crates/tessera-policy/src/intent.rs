@@ -2,7 +2,7 @@
 
 use stellar_xdr::{
     AccountId, Asset, FeeBumpTransactionInnerTx, HostFunction, MuxedAccount, Operation, OperationBody, Preconditions,
-    PublicKey, ScAddress, Transaction, TransactionEnvelope, TransactionV0, Uint256,
+    PublicKey, ScAddress, ScVal, Transaction, TransactionEnvelope, TransactionV0, Uint256,
 };
 
 /// Everything a policy looks at.
@@ -54,9 +54,22 @@ pub enum OpKind {
         contract: String,
         /// Function name.
         function: String,
+        /// Decoded arguments when the call looks like SEP-41 `transfer(from, to, amount)`.
+        transfer: Option<TokenTransfer>,
     },
     /// Any other operation, by its snake_case name (`set_options`, `account_merge`, …).
     Other(String),
+}
+
+/// A SEP-41 `transfer(from: Address, to: Address, amount: i128)` call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenTransfer {
+    /// Address the tokens leave.
+    pub from: String,
+    /// Address the tokens go to.
+    pub to: String,
+    /// Amount in the token's smallest unit.
+    pub amount: i128,
 }
 
 impl OpKind {
@@ -147,10 +160,11 @@ fn op(o: &Operation, tx_source: &str) -> Op {
         }
         OperationBody::InvokeHostFunction(i) => match &i.host_function {
             HostFunction::InvokeContract(args) => match &args.contract_address {
-                ScAddress::Contract(id) => OpKind::InvokeContract {
-                    contract: id.to_string(),
-                    function: String::from_utf8_lossy(args.function_name.0.as_slice()).into_owned(),
-                },
+                ScAddress::Contract(id) => {
+                    let function = String::from_utf8_lossy(args.function_name.0.as_slice()).into_owned();
+                    let transfer = if function == "transfer" { token_transfer(&args.args) } else { None };
+                    OpKind::InvokeContract { contract: id.to_string(), function, transfer }
+                }
                 _ => OpKind::Other("invoke_host_function".to_owned()),
             },
             other => OpKind::Other(snake(other.name())),
@@ -158,6 +172,20 @@ fn op(o: &Operation, tx_source: &str) -> Op {
         body => OpKind::Other(snake(body.name())),
     };
     Op { source, kind }
+}
+
+fn address(v: &ScVal) -> Option<String> {
+    match v {
+        ScVal::Address(ScAddress::Account(a)) => Some(account_id(a)),
+        ScVal::Address(ScAddress::Contract(c)) => Some(c.to_string()),
+        _ => None,
+    }
+}
+
+fn token_transfer(args: &[ScVal]) -> Option<TokenTransfer> {
+    let [from, to, ScVal::I128(parts)] = args else { return None };
+    let amount = (i128::from(parts.hi) << 64) | i128::from(parts.lo);
+    Some(TokenTransfer { from: address(from)?, to: address(to)?, amount })
 }
 
 fn snake(camel: &str) -> String {

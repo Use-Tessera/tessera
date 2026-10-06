@@ -20,5 +20,5 @@
 mod intent;
 mod policy;
 
-pub use intent::{Intent, Op, OpKind};
-pub use policy::{Decision, OPERATIONS, Policy, PolicyError, format_amount, parse_amount};
+pub use intent::{Intent, Op, OpKind, TokenTransfer};
+pub use policy::{Decision, OPERATIONS, Policy, PolicyError, format_amount, format_units, parse_amount, parse_units};

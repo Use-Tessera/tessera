@@ -10,6 +10,7 @@ const NOW: u64 = 1_791_249_500;
 const GROUP: [u8; 32] = [9; 32];
 const USDC_ISSUER: &str = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 const CONTRACT: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const TOKEN: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
 
 fn policy() -> Policy {
     Policy::from_toml(include_str!("../../../examples/policy.toml")).unwrap()
@@ -54,15 +55,32 @@ fn usdc(units: i64) -> OperationBody {
 }
 
 fn call(contract: &str, function: &str) -> OperationBody {
+    call_with(contract, function, vec![])
+}
+
+fn call_with(contract: &str, function: &str, args: Vec<ScVal>) -> OperationBody {
     let id: ContractId = contract.parse().unwrap();
     OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
         host_function: HostFunction::InvokeContract(InvokeContractArgs {
             contract_address: ScAddress::Contract(id),
             function_name: ScSymbol(function.as_bytes().to_vec().try_into().unwrap()),
-            args: VecM::default(),
+            args: args.try_into().unwrap(),
         }),
         auth: VecM::default(),
     })
+}
+
+fn account_val(key: [u8; 32]) -> ScVal {
+    ScVal::Address(ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(key)))))
+}
+
+fn i128_val(v: i128) -> ScVal {
+    ScVal::I128(Int128Parts { hi: (v >> 64) as i64, lo: v as u64 })
+}
+
+/// SEP-41 transfer of `units` whole tokens (6 decimals) from `from` to account [7; 32].
+fn token_transfer(from: [u8; 32], micro_units: i128) -> OperationBody {
+    call_with(TOKEN, "transfer", vec![account_val(from), account_val([7; 32]), i128_val(micro_units)])
 }
 
 fn judge(t: Transaction) -> Vec<String> {
@@ -221,7 +239,7 @@ fn intents_are_readable() {
     assert_eq!(i.operations.len(), 2);
     assert!(matches!(&i.operations[0].kind, OpKind::Payment { asset, .. } if asset == &format!("USDC:{USDC_ISSUER}")));
     assert!(
-        matches!(&i.operations[1].kind, OpKind::InvokeContract { contract, function } if contract == CONTRACT && function == "transfer")
+        matches!(&i.operations[1].kind, OpKind::InvokeContract { contract, function, .. } if contract == CONTRACT && function == "transfer")
     );
 }
 
@@ -252,4 +270,61 @@ fn amounts_round_trip() {
     }
     assert_eq!(format_amount(125_000_000), "12.5");
     assert_eq!(format_amount(10_000_000), "1");
+}
+
+fn token_policy() -> Policy {
+    let toml = format!(
+        "{}\n[[token]]\ncontract = \"{TOKEN}\"\nper_transaction = \"50\"\nper_day = \"120\"\ndecimals = 6\n",
+        include_str!("../../../examples/policy.toml")
+    );
+    Policy::from_toml(&toml).unwrap()
+}
+
+fn judge_tokens(t: Transaction, spent: i128) -> Vec<String> {
+    token_policy().evaluate(&Intent::from_envelope(&env(t)), &group(), NOW, |_| spent).violations
+}
+
+#[test]
+fn sep41_transfers_are_decoded() {
+    let i = Intent::from_envelope(&env(tx(vec![token_transfer(GROUP, 12_500_000)])));
+    let OpKind::InvokeContract { transfer: Some(t), .. } = &i.operations[0].kind else { panic!("not decoded") };
+    assert_eq!((t.from.as_str(), t.amount), (group().as_str(), 12_500_000));
+}
+
+#[test]
+fn token_rules_cap_transfer_amounts_with_the_tokens_decimals() {
+    assert!(judge_tokens(tx(vec![token_transfer(GROUP, 50_000_000)]), 0).is_empty(), "50 tokens at 6 decimals");
+    let v = judge_tokens(tx(vec![token_transfer(GROUP, 50_000_001)]), 0);
+    assert!(v.iter().any(|m| m.contains("spends 50.000001") && m.contains("per_transaction 50")), "{v:?}");
+    let v = judge_tokens(tx(vec![token_transfer(GROUP, 30_000_000)]), 100_000_000);
+    assert!(v.iter().any(|m| m.contains("24h spend") && m.contains("to 130")), "{v:?}");
+}
+
+#[test]
+fn token_transfers_must_move_the_groups_own_funds() {
+    let v = judge_tokens(tx(vec![token_transfer([3; 32], 1)]), 0);
+    assert!(v.iter().any(|m| m.contains("not the group account")), "{v:?}");
+}
+
+#[test]
+fn token_rules_respect_the_destination_allowlist() {
+    let toml = format!(
+        "{}\n[destinations]\nallow = [\"GAIH3ULLFQ4DGSECF2AR555KZ4KNDGEKN4AFI4SU2M7B43MGK3QJZNSR\"]\n[[token]]\ncontract = \"{TOKEN}\"\nper_transaction = \"50\"\nper_day = \"120\"\ndecimals = 6\n",
+        include_str!("../../../examples/policy.toml")
+    );
+    let p = Policy::from_toml(&toml).unwrap();
+    let v =
+        p.evaluate(&Intent::from_envelope(&env(tx(vec![token_transfer(GROUP, 1)]))), &group(), NOW, |_| 0).violations;
+    assert!(v.iter().any(|m| m.contains("not on the allowlist")), "{v:?}");
+}
+
+#[test]
+fn units_respect_decimals() {
+    use tessera_policy::{format_units, parse_units};
+    assert_eq!(parse_units("1.5", 6), Some(1_500_000));
+    assert_eq!(parse_units("1.5", 0), None);
+    assert_eq!(parse_units("12", 0), Some(12));
+    assert_eq!(parse_units("0.0000001", 6), None);
+    assert_eq!(format_units(1_500_000, 6), "1.5");
+    assert_eq!(format_units(12, 0), "12");
 }

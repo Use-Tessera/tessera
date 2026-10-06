@@ -60,6 +60,8 @@ struct File {
     destinations: Option<Destinations>,
     #[serde(default, rename = "contract")]
     contracts: Vec<ContractRule>,
+    #[serde(default, rename = "token")]
+    tokens: Vec<TokenRule>,
 }
 
 #[derive(Deserialize)]
@@ -89,10 +91,25 @@ struct ContractRule {
     functions: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TokenRule {
+    contract: String,
+    per_transaction: String,
+    per_day: String,
+    #[serde(default = "seven")]
+    decimals: u32,
+}
+
+fn seven() -> u32 {
+    7
+}
+
 #[derive(Clone, Debug)]
 struct Limits {
     per_transaction: i128,
     per_day: i128,
+    decimals: u32,
 }
 
 /// A parsed, validated policy.
@@ -126,26 +143,41 @@ impl Decision {
 
 /// Parses a decimal amount with up to 7 fractional digits into stroops.
 pub fn parse_amount(s: &str) -> Option<i128> {
+    parse_units(s, 7)
+}
+
+/// Parses a decimal amount into the smallest unit of a token with `decimals` places.
+pub fn parse_units(s: &str, decimals: u32) -> Option<i128> {
     let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    let places = usize::try_from(decimals).ok()?;
     if whole.is_empty()
-        || frac.len() > 7
+        || frac.len() > places
         || (s.contains('.') && frac.is_empty())
         || !whole.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
     {
         return None;
     }
+    let scale = 10i128.checked_pow(decimals)?;
     let whole: i128 = whole.parse().ok()?;
-    let frac: i128 = format!("{frac:0<7}").parse().ok()?;
-    whole.checked_mul(10_000_000)?.checked_add(frac)
+    let frac: i128 = if places == 0 { 0 } else { format!("{frac:0<places$}").parse().ok()? };
+    whole.checked_mul(scale)?.checked_add(frac)
 }
 
 /// Formats stroops as a decimal amount.
 pub fn format_amount(stroops: i128) -> String {
-    let sign = if stroops < 0 { "-" } else { "" };
-    let a = stroops.unsigned_abs();
-    let frac = format!("{:07}", a % 10_000_000);
+    format_units(stroops, 7)
+}
+
+/// Formats an amount in a token's smallest unit as a decimal.
+pub fn format_units(v: i128, decimals: u32) -> String {
+    let sign = if v < 0 { "-" } else { "" };
+    let a = v.unsigned_abs();
+    let Some(scale) = 10u128.checked_pow(decimals) else { return v.to_string() };
+    let places = usize::try_from(decimals).unwrap_or(0);
+    let whole = a.checked_div(scale).unwrap_or(0);
+    let frac = format!("{:0places$}", a.checked_rem(scale).unwrap_or(0));
     let frac = frac.trim_end_matches('0');
-    if frac.is_empty() { format!("{sign}{}", a / 10_000_000) } else { format!("{sign}{}.{frac}", a / 10_000_000) }
+    if frac.is_empty() { format!("{sign}{whole}") } else { format!("{sign}{whole}.{frac}") }
 }
 
 impl Policy {
@@ -167,12 +199,35 @@ impl Policy {
         for a in f.assets {
             let amount =
                 |s: &str| parse_amount(s).ok_or_else(|| PolicyError(format!("bad amount {s:?} for {}", a.asset)));
-            let limits = Limits { per_transaction: amount(&a.per_transaction)?, per_day: amount(&a.per_day)? };
+            let limits =
+                Limits { per_transaction: amount(&a.per_transaction)?, per_day: amount(&a.per_day)?, decimals: 7 };
             if assets.insert(a.asset.clone(), limits).is_some() {
                 return Err(PolicyError(format!("asset {} listed twice", a.asset)));
             }
         }
-        let contracts = f.contracts.into_iter().map(|c| (c.id, c.functions)).collect();
+        let mut contracts: BTreeMap<String, Vec<String>> =
+            f.contracts.into_iter().map(|c| (c.id, c.functions)).collect();
+        for t in f.tokens {
+            if t.decimals > 18 {
+                return Err(PolicyError(format!("token {}: decimals must be at most 18", t.contract)));
+            }
+            let amount = |s: &str| {
+                parse_units(s, t.decimals)
+                    .ok_or_else(|| PolicyError(format!("bad amount {s:?} for token {}", t.contract)))
+            };
+            let limits = Limits {
+                per_transaction: amount(&t.per_transaction)?,
+                per_day: amount(&t.per_day)?,
+                decimals: t.decimals,
+            };
+            if assets.insert(t.contract.clone(), limits).is_some() {
+                return Err(PolicyError(format!("token {} listed twice", t.contract)));
+            }
+            let fns = contracts.entry(t.contract).or_default();
+            if !fns.iter().any(|f| f == "transfer" || f == "*") {
+                fns.push("transfer".into());
+            }
+        }
         Ok(Self {
             network: f.network,
             max_fee: f.max_fee,
@@ -228,7 +283,7 @@ impl Policy {
                 deny(format!("operation {i}: {name} is not allowed"));
                 continue;
             }
-            let mut pay = |asset: &str, destination: &str, amount: i64| {
+            let mut pay = |deny: &mut dyn FnMut(String), asset: &str, destination: &str, amount: i128| {
                 if let Some(allow) = &self.destinations
                     && !allow.iter().any(|a| a == destination)
                 {
@@ -238,19 +293,35 @@ impl Policy {
                     deny(format!("operation {i}: no limits configured for asset {asset}"));
                 }
                 let e = spend.entry(asset.to_owned()).or_default();
-                *e = e.saturating_add(i128::from(amount));
+                *e = e.saturating_add(amount);
             };
             match &op.kind {
-                OpKind::Payment { destination, asset, amount } => pay(asset, destination, *amount),
-                OpKind::CreateAccount { destination, starting_balance } => {
-                    pay("native", destination, *starting_balance)
+                OpKind::Payment { destination, asset, amount } => {
+                    pay(&mut deny, asset, destination, i128::from(*amount))
                 }
-                OpKind::InvokeContract { contract, function } => match self.contracts.get(contract) {
+                OpKind::CreateAccount { destination, starting_balance } => {
+                    pay(&mut deny, "native", destination, i128::from(*starting_balance))
+                }
+                OpKind::InvokeContract { contract, function, transfer } => match self.contracts.get(contract) {
                     None => deny(format!("operation {i}: contract {contract} is not allowed")),
                     Some(fns) if !fns.iter().any(|f| f == function || f == "*") => {
                         deny(format!("operation {i}: function {function} of {contract} is not allowed"))
                     }
-                    Some(_) => {}
+                    Some(_) => {
+                        // Token rules cap SEP-41 transfers like payments of a classic asset.
+                        if let (Some(t), true) = (transfer, self.assets.contains_key(contract)) {
+                            if t.from != account {
+                                deny(format!(
+                                    "operation {i}: transfer moves tokens from {}, not the group account",
+                                    t.from
+                                ));
+                            }
+                            if t.amount <= 0 {
+                                deny(format!("operation {i}: transfer amount must be positive"));
+                            }
+                            pay(&mut deny, contract, &t.to, t.amount);
+                        }
+                    }
                 },
                 OpKind::Other(_) => {}
             }
@@ -258,19 +329,20 @@ impl Policy {
 
         for (asset, amount) in &spend {
             let Some(limits) = self.assets.get(asset) else { continue };
+            let fmt = |v: i128| format_units(v, limits.decimals);
             if *amount > limits.per_transaction {
                 deny(format!(
                     "spends {} {asset}, more than per_transaction {}",
-                    format_amount(*amount),
-                    format_amount(limits.per_transaction)
+                    fmt(*amount),
+                    fmt(limits.per_transaction)
                 ));
             }
             let total = spent_today(asset).saturating_add(*amount);
             if total > limits.per_day {
                 deny(format!(
                     "would bring 24h spend of {asset} to {}, more than per_day {}",
-                    format_amount(total),
-                    format_amount(limits.per_day)
+                    fmt(total),
+                    fmt(limits.per_day)
                 ));
             }
         }

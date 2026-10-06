@@ -33,3 +33,12 @@ per_day = "1000"
 [[contract]]
 id = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
 functions = ["transfer"]
+
+# SEP-41 tokens whose `transfer` calls are capped like payments. Listing a
+# token also allows its `transfer` function; amounts use the token's decimals.
+# Transfers must move the group's own tokens, and `[destinations]` applies.
+# [[token]]
+# contract = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75"
+# per_transaction = "250"
+# per_day = "1000"
+# decimals = 7
