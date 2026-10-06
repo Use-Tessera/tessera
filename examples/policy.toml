@@ -1,0 +1,35 @@
+# Tessera signer policy. Anything not allowed here is refused.
+# Each signer enforces its own copy; a transaction is signed only if at least
+# `threshold` signers approve it.
+
+network = "testnet"
+
+# Highest total fee, in stroops, the signer will pay for one transaction.
+max_fee = 100000
+
+# Transactions must carry time bounds that expire within this many seconds.
+max_validity = 900
+
+[operations]
+allow = ["payment", "invoke_contract"]
+
+# Assets the group may send, in whole units (up to 7 decimals). Payments in
+# unlisted assets are refused.
+[[asset]]
+asset = "native"
+per_transaction = "100"
+per_day = "500"
+
+[[asset]]
+asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+per_transaction = "250"
+per_day = "1000"
+
+# Optional. When present, payments may only go to these accounts.
+# [destinations]
+# allow = ["GAIH3ULLFQ4DGSECF2AR555KZ4KNDGEKN4AFI4SU2M7B43MGK3QJZNSR"]
+
+# Contracts the group may call, and which functions. "*" allows all.
+[[contract]]
+id = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+functions = ["transfer"]
