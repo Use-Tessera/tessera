@@ -33,8 +33,13 @@ pub fn signing_package(
     commitments: &BTreeMap<String, String>,
 ) -> Result<(SigningPackage, [u8; 32]), Error> {
     let hash = transaction_hash(network, envelope)?;
+    Ok((package_for(&hash, commitments)?, hash))
+}
+
+/// Builds the signing package for any 32-byte payload (transaction or authorization entry hash).
+pub fn package_for(hash: &[u8; 32], commitments: &BTreeMap<String, String>) -> Result<SigningPackage, Error> {
     let commitments = decode_map(commitments, "commitments", SigningCommitments::deserialize)?;
-    Ok((SigningPackage::new(commitments, &hash), hash))
+    Ok(SigningPackage::new(commitments, hash))
 }
 
 /// Round 2: this signer's share of the signature.
@@ -64,6 +69,11 @@ pub fn aggregate(
 
 /// Runs both rounds in-process with the given shares. For tests, demos and offline signing.
 pub fn sign_locally(network: &Network, envelope: &TransactionEnvelope, shares: &[KeyShare]) -> Result<[u8; 64], Error> {
+    sign_message_locally(&transaction_hash(network, envelope)?, shares)
+}
+
+/// Runs both rounds in-process over any 32-byte payload.
+pub fn sign_message_locally(hash: &[u8; 32], shares: &[KeyShare]) -> Result<[u8; 64], Error> {
     let first = shares.first().ok_or(Error::Threshold { threshold: 0, signers: 0 })?;
     let mut nonces = BTreeMap::new();
     let mut commitments = BTreeMap::new();
@@ -72,7 +82,7 @@ pub fn sign_locally(network: &Network, envelope: &TransactionEnvelope, shares: &
         nonces.insert(s.identifier_hex(), n);
         commitments.insert(s.identifier_hex(), encode_commitments(&c)?);
     }
-    let (package, _) = signing_package(network, envelope, &commitments)?;
+    let package = package_for(hash, &commitments)?;
     let mut sig_shares = BTreeMap::new();
     for s in shares {
         let n = nonces.remove(&s.identifier_hex()).ok_or(Error::BadSignature)?;

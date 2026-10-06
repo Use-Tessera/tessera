@@ -20,6 +20,7 @@
 //! [`signing`] implements the rounds a networked signer runs, [`protocol`] the
 //! messages they exchange, and [`keys`] the encrypted share files.
 
+pub mod auth;
 mod error;
 pub mod keys;
 pub mod protocol;
