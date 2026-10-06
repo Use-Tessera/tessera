@@ -71,9 +71,10 @@ These are tracked as roadmap items, not hidden:
    generation is the next milestone.
 2. **Bearer-token transport auth.** Signer endpoints check a shared bearer
    token in constant time. Deploy them behind TLS. Mutual TLS is planned.
-3. **Daily limits are per signer and per asset in stroops.** They do not
-   convert between assets, and contract calls (including SEP-41 `transfer`)
-   are allowed or refused by contract and function only, not by amount.
+3. **Limits are per signer and per asset.** They do not convert between
+   assets. SEP-41 `transfer` calls are capped when the token is listed under
+   `[[token]]`; other contract functions (`approve`, swaps, custom calls) are
+   allowed or refused by contract and function only, not by amount.
 4. **The latest ledger comes from the coordinator.** A signer cannot read the
    chain itself, so it trusts the coordinator's `latest_ledger` when bounding
    an authorization's lifetime. It refuses values more than about a day behind
