@@ -16,19 +16,19 @@ tessera-core = { path = "crates/tessera-core", version = "0.1.0" }
 tessera-policy = { path = "crates/tessera-policy", version = "0.1.0" }
 frost-ed25519 = "3"
 rand_core = { version = "0.6", features = ["getrandom"] }
-getrandom = "0.3"
+getrandom = "0.4"
 stellar-xdr = { version = "28.0.1", default-features = false, features = ["std", "base64"] }
 sha2 = "0.11"
 ed25519-dalek = "3"
-x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
-argon2 = "0.5"
-chacha20poly1305 = "0.10"
+x25519-dalek = { version = "3", features = ["static_secrets", "zeroize"] }
+argon2 = "0.6"
+chacha20poly1305 = "0.11"
 zeroize = { version = "1.8", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = "1.1"
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 thiserror = "2"
 clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions", "env"] }
 axum = "0.8"
