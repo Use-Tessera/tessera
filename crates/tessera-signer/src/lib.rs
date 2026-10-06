@@ -9,10 +9,12 @@
 //! | `POST /v1/round2/auth` | A signature share over a Soroban authorization entry, if the policy allows it |
 //! | `POST /v1/aggregate/auth` | Combine shares into a signed authorization entry |
 //!
-//! Every route requires `Authorization: Bearer <token>` when a token is configured.
+//! Every `/v1` route requires `Authorization: Bearer <token>` when a token is
+//! configured. `GET /healthz` is open. Bodies are capped at 256 KB and requests
+//! at 30 seconds.
 
 pub mod config;
 mod routes;
 pub mod state;
 
-pub use routes::{Signer, router};
+pub use routes::{MAX_BODY, REQUEST_TIMEOUT, Signer, router};

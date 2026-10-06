@@ -336,3 +336,19 @@ async fn a_stale_latest_ledger_is_refused() {
     assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
     assert!(v["error"].as_str().unwrap().contains("stale"));
 }
+
+#[tokio::test]
+async fn health_needs_no_token_and_bodies_are_capped() {
+    let g = group();
+    let resp = g.routers[0].clone().oneshot(Request::get("/healthz").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let huge = format!("{{\"session\":\"{}\"}}", "a".repeat(tessera_signer::MAX_BODY));
+    let req = Request::post("/v1/round1")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::from(huge))
+        .unwrap();
+    let resp = g.routers[0].clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}

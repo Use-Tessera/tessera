@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -73,9 +73,14 @@ impl Signer {
     }
 }
 
+/// Largest request body accepted (transaction envelopes are far smaller).
+pub const MAX_BODY: usize = 256 * 1024;
+/// Longest a request may take.
+pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The signer's HTTP routes.
 pub fn router(signer: Arc<Signer>) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/v1/info", get(info))
         .route("/v1/round1", post(round1))
         .route("/v1/round2", post(round2))
@@ -83,7 +88,19 @@ pub fn router(signer: Arc<Signer>) -> Router {
         .route("/v1/round2/auth", post(round2_auth))
         .route("/v1/aggregate/auth", post(aggregate_auth))
         .route_layer(middleware::from_fn_with_state(signer.clone(), authorize))
-        .with_state(signer)
+        .with_state(signer);
+    Router::new()
+        .route("/healthz", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
+        .merge(api)
+        .layer(middleware::from_fn(timeout))
+        .layer(DefaultBodyLimit::max(MAX_BODY))
+}
+
+async fn timeout(req: Request, next: Next) -> Response {
+    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => ApiError::new(StatusCode::REQUEST_TIMEOUT, "request timed out").into_response(),
+    }
 }
 
 struct ApiError(StatusCode, ErrorBody);
