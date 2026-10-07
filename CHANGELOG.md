@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-07
+
+### Fixed
+
+- Release packaging: only the archives are uploaded, checksummed and attached;
+  0.1.0's publish step tripped over the staging folders.
+
 ## [0.1.0] - 2026-10-07
 
 ### Added
@@ -31,5 +38,6 @@ All notable changes to this project are documented here. The format follows
 - Container image for the signer, and release binaries for Linux, macOS and
   Windows.
 
-[Unreleased]: https://github.com/Use-Tessera/tessera/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Use-Tessera/tessera/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Use-Tessera/tessera/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Use-Tessera/tessera/releases/tag/v0.1.0

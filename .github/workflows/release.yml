@@ -35,7 +35,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: tessera-*.*
+          path: |
+            tessera-*.tar.gz
+            tessera-*.zip
 
   publish:
     needs: build
@@ -45,11 +47,12 @@ jobs:
         with:
           merge-multiple: true
       - name: Checksums
-        run: sha256sum tessera-* > SHA256SUMS
+        run: sha256sum tessera-*.tar.gz tessera-*.zip > SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            tessera-*
+            tessera-*.tar.gz
+            tessera-*.zip
             SHA256SUMS
           generate_release_notes: true
 
