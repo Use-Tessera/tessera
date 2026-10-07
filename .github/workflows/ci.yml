@@ -39,7 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88
+      # The toolchain goes in the input, not the tag, so Dependabot never "upgrades" the MSRV.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
       - run: rm rust-toolchain.toml
       - run: cargo +1.88 check --workspace --locked
 
