@@ -6,15 +6,20 @@ updates:
     schedule:
       interval: "weekly"
     groups:
+      # Cryptography crates arrive in their own PR: their major releases change
+      # the APIs under share files and the DKG channel, and are migrated
+      # deliberately with compatibility tests rather than with routine bumps.
+      crypto:
+        patterns: ["frost-*", "ed25519-dalek", "x25519-dalek", "argon2", "chacha20poly1305", "getrandom", "rand_core", "sha2", "zeroize"]
       cargo:
         patterns: ["*"]
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
-    groups:
-      docker:
-        patterns: ["*"]
+    # The image's Rust follows rust-toolchain.toml, which is bumped by hand.
+    ignore:
+      - dependency-name: "rust"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
