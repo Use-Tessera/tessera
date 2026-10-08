@@ -1,0 +1,45 @@
+name: Pages
+
+# The policy checker: tessera-policy compiled to WebAssembly, served from GitHub Pages.
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "bindings/**", "crates/tessera-policy/**", "examples/policy.toml", "Cargo.*", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo build --release --locked -p tessera-wasm --target wasm32-unknown-unknown
+      - name: Generate the JavaScript bindings
+        run: |
+          version=$(cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+          wasm-bindgen --target web --out-dir site/pkg target/wasm32-unknown-unknown/release/tessera_wasm.wasm
+      - run: cp examples/policy.toml site/policy.toml
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
