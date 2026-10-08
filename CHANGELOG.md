@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `tessera-wasm` (`bindings/wasm`): the signing policy for JavaScript.
+  `check()` judges a base64 transaction envelope or Soroban authorization
+  entry against a `policy.toml`; `samples()` builds example inputs.
+- A [policy checker](https://use-tessera.github.io/tessera/) on GitHub Pages,
+  running the signer's own policy code in the browser.
+
 ## [0.1.1] - 2026-10-07
 
 ### Fixed
