@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tessera policy checker</title>
+  <meta name="description" content="Check whether a Tessera signer would sign a Stellar transaction or Soroban authorization entry under a policy, in your browser.">
+  <link rel="icon" href="logo.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="https://github.com/Use-Tessera" aria-label="Tessera on GitHub">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="logo-dark.svg">
+      <img src="logo.svg" alt="Tessera" height="36">
+    </picture>
+  </a>
+  <nav>
+    <a href="https://github.com/Use-Tessera/tessera">Signer</a>
+    <a href="https://github.com/Use-Tessera/tessera-coordinator">Coordinator</a>
+    <a href="https://github.com/Use-Tessera/tessera/blob/main/docs/security-model.md">Security model</a>
+  </nav>
+</header>
+
+<main>
+  <section class="intro">
+    <h1>Would your signers sign this?</h1>
+    <p>Every Tessera signer decodes what it is asked to sign and refuses anything its policy doesn't allow.
+      Paste a policy and a transaction, and this page runs the signer's own policy code on them, here in your
+      browser, with nothing sent anywhere.</p>
+  </section>
+
+  <div class="grid">
+    <section class="card" aria-labelledby="policy-h">
+      <div class="card-head">
+        <h2 id="policy-h">Policy</h2>
+        <button type="button" class="link" id="reset-policy">Reset to the example</button>
+      </div>
+      <label class="sr" for="policy">policy.toml</label>
+      <textarea id="policy" spellcheck="false" autocomplete="off" placeholder="network = &quot;testnet&quot;&#10;max_fee = 100000&#10;…"></textarea>
+      <p class="hint">The format of a signer's <code>policy.toml</code>. Anything not allowed is refused.</p>
+    </section>
+
+    <section class="card" aria-labelledby="tx-h">
+      <div class="card-head"><h2 id="tx-h">What to sign</h2></div>
+      <div class="samples" id="samples" role="group" aria-label="Examples"></div>
+      <label class="sr" for="xdr">Base64 XDR</label>
+      <textarea id="xdr" class="short" spellcheck="false" autocomplete="off" placeholder="Paste a base64 TransactionEnvelope or SorobanAuthorizationEntry"></textarea>
+      <div class="fields">
+        <label>Group account<input id="account" spellcheck="false" autocomplete="off" placeholder="G…"></label>
+        <label>Latest ledger<input id="ledger" inputmode="numeric" autocomplete="off" placeholder="e.g. 1200000"></label>
+      </div>
+      <p class="hint" id="ledger-hint">Expiry is checked against the current time. The ledger is only used for authorization entries.</p>
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="result-h" aria-live="polite">
+    <h2 id="result-h" class="sr">Result</h2>
+    <div id="result"><p class="muted">Loading the policy engine…</p></div>
+  </section>
+</main>
+
+<footer>
+  <p>The checker is <a href="https://github.com/Use-Tessera/tessera/tree/main/crates/tessera-policy">tessera-policy</a>
+    compiled to WebAssembly, the same code every <code>tessera-signer</code> runs before it contributes a share.
+    Daily limits assume nothing has been spent yet today.</p>
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>
