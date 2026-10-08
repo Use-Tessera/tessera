@@ -54,6 +54,13 @@ Reproduce it with [`scripts/testnet-demo.sh`](https://github.com/Use-Tessera/tes
 
 Testnet is reset every few months, after which these links stop resolving; the script reproduces the whole run on a fresh network.
 
+## Try a policy in your browser
+
+The [policy checker](https://use-tessera.github.io/tessera/) runs the signer's
+own policy code, compiled to WebAssembly: paste a `policy.toml` and a
+transaction or Soroban authorization entry, and it shows whether the signers
+would sign it and, if not, every rule it breaks.
+
 ## Quick start
 
 Download `tessera` and `tessera-signer` for Linux, macOS or Windows from
