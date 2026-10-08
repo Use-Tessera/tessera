@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/tessera-core", "crates/tessera-policy", "crates/tessera-signer", "crates/tessera-cli"]
+members = ["crates/tessera-core", "crates/tessera-policy", "crates/tessera-signer", "crates/tessera-cli", "bindings/wasm"]
 
 [workspace.package]
 version = "0.1.1"
