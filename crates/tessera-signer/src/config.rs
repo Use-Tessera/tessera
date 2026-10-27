@@ -27,6 +27,22 @@ pub struct Config {
     /// within limits.
     #[serde(default)]
     pub rpc: Option<String>,
+    /// Mutual TLS: serve HTTPS and accept only clients holding a certificate
+    /// from `client_ca`. The bearer token is still required on top.
+    #[serde(default)]
+    pub tls: Option<Tls>,
+}
+
+/// `[tls]` in `signer.toml`. Files are PEM.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tls {
+    /// Certificate chain this signer presents.
+    pub cert: PathBuf,
+    /// Private key for `cert`.
+    pub key: PathBuf,
+    /// CA certificates that issue the coordinator's client certificates.
+    pub client_ca: PathBuf,
 }
 
 impl Config {
@@ -35,7 +51,11 @@ impl Config {
         let text = std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
         let mut c: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         let base = path.parent().unwrap_or(Path::new("."));
-        for p in [&mut c.share, &mut c.policy, &mut c.state_dir] {
+        let mut paths = vec![&mut c.share, &mut c.policy, &mut c.state_dir];
+        if let Some(t) = c.tls.as_mut() {
+            paths.extend([&mut t.cert, &mut t.key, &mut t.client_ca]);
+        }
+        for p in paths {
             if p.is_relative() {
                 *p = base.join(&*p);
             }

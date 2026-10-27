@@ -12,11 +12,13 @@
 //!
 //! Every `/v1` route and `/metrics` require `Authorization: Bearer <token>` when a token is
 //! configured. `GET /healthz` is open. Bodies are capped at 256 KB and requests
-//! at 30 seconds.
+//! at 30 seconds. With `[tls]` configured the API is served over mutual TLS
+//! ([`tls`]), and the token is required on top.
 
 pub mod config;
 mod routes;
 pub mod rpc;
 pub mod state;
+pub mod tls;
 
 pub use routes::{LedgerSource, MAX_BODY, REQUEST_TIMEOUT, Signer, router};

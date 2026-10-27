@@ -33,8 +33,12 @@ clap.workspace = true
 hex.workspace = true
 sha2.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 
 [dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 ed25519-dalek.workspace = true
