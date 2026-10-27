@@ -84,6 +84,8 @@ struct AssetRule {
     asset: String,
     per_transaction: String,
     per_day: String,
+    #[serde(default)]
+    per_hour: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +107,8 @@ struct TokenRule {
     contract: String,
     per_transaction: String,
     per_day: String,
+    #[serde(default)]
+    per_hour: Option<String>,
     #[serde(default = "seven")]
     decimals: u32,
 }
@@ -117,7 +121,23 @@ fn seven() -> u32 {
 struct Limits {
     per_transaction: i128,
     per_day: i128,
+    per_hour: Option<i128>,
     decimals: u32,
+}
+
+/// Seconds in the spend windows a policy limits: `per_day` and `per_hour`.
+pub const DAY: u64 = 86_400;
+/// See [`DAY`].
+pub const HOUR: u64 = 3_600;
+
+/// Checks that an hourly limit can ever apply: it must not exceed the daily one.
+fn hourly(per_hour: Option<i128>, per_day: i128, what: &str) -> Result<Option<i128>, PolicyError> {
+    match per_hour {
+        Some(h) if h > per_day => {
+            Err(PolicyError(format!("{what}: per_hour is more than per_day, so it would never apply")))
+        }
+        other => Ok(other),
+    }
 }
 
 /// A parsed, validated policy.
@@ -208,8 +228,14 @@ impl Policy {
         for a in f.assets {
             let amount =
                 |s: &str| parse_amount(s).ok_or_else(|| PolicyError(format!("bad amount {s:?} for {}", a.asset)));
-            let limits =
-                Limits { per_transaction: amount(&a.per_transaction)?, per_day: amount(&a.per_day)?, decimals: 7 };
+            let per_day = amount(&a.per_day)?;
+            let per_hour = a.per_hour.as_deref().map(amount).transpose()?;
+            let limits = Limits {
+                per_transaction: amount(&a.per_transaction)?,
+                per_day,
+                per_hour: hourly(per_hour, per_day, &a.asset)?,
+                decimals: 7,
+            };
             if assets.insert(a.asset.clone(), limits).is_some() {
                 return Err(PolicyError(format!("asset {} listed twice", a.asset)));
             }
@@ -224,9 +250,12 @@ impl Policy {
                 parse_units(s, t.decimals)
                     .ok_or_else(|| PolicyError(format!("bad amount {s:?} for token {}", t.contract)))
             };
+            let per_day = amount(&t.per_day)?;
+            let per_hour = t.per_hour.as_deref().map(amount).transpose()?;
             let limits = Limits {
                 per_transaction: amount(&t.per_transaction)?,
-                per_day: amount(&t.per_day)?,
+                per_day,
+                per_hour: hourly(per_hour, per_day, &t.contract)?,
                 decimals: t.decimals,
             };
             if assets.insert(t.contract.clone(), limits).is_some() {
@@ -266,7 +295,7 @@ impl Policy {
         intent: &AuthIntent,
         account: &str,
         latest_ledger: u32,
-        spent_today: impl Fn(&str) -> i128,
+        spent: impl Fn(&str, u64) -> i128,
     ) -> Decision {
         let mut d = Decision::default();
         let mut deny = |msg: String| d.violations.push(msg);
@@ -315,7 +344,7 @@ impl Policy {
                 },
             }
         }
-        self.check_limits(&spend, &spent_today, &mut deny);
+        self.check_limits(&spend, &spent, &mut deny);
         d.spend = spend;
         d
     }
@@ -323,7 +352,7 @@ impl Policy {
     fn check_limits(
         &self,
         spend: &BTreeMap<String, i128>,
-        spent_today: &dyn Fn(&str) -> i128,
+        spent: &dyn Fn(&str, u64) -> i128,
         deny: &mut dyn FnMut(String),
     ) {
         for (asset, amount) in spend {
@@ -336,7 +365,7 @@ impl Policy {
                     fmt(limits.per_transaction)
                 ));
             }
-            let total = spent_today(asset).saturating_add(*amount);
+            let total = spent(asset, DAY).saturating_add(*amount);
             if total > limits.per_day {
                 deny(format!(
                     "would bring 24h spend of {asset} to {}, more than per_day {}",
@@ -344,14 +373,25 @@ impl Policy {
                     fmt(limits.per_day)
                 ));
             }
+            if let Some(per_hour) = limits.per_hour {
+                let hour = spent(asset, HOUR).saturating_add(*amount);
+                if hour > per_hour {
+                    deny(format!(
+                        "would bring 1h spend of {asset} to {}, more than per_hour {}",
+                        fmt(hour),
+                        fmt(per_hour)
+                    ));
+                }
+            }
         }
     }
 
     /// Judges `intent` for the group account `account` at unix time `now`.
     ///
-    /// `spent_today(asset)` returns what this signer already approved for the
-    /// asset in the trailing 24 hours, in stroops.
-    pub fn evaluate(&self, intent: &Intent, account: &str, now: u64, spent_today: impl Fn(&str) -> i128) -> Decision {
+    /// `spent(asset, window)` returns what this signer already approved for
+    /// the asset in the trailing `window` seconds ([`DAY`] or [`HOUR`]), in
+    /// the asset's smallest unit.
+    pub fn evaluate(&self, intent: &Intent, account: &str, now: u64, spent: impl Fn(&str, u64) -> i128) -> Decision {
         let mut d = Decision::default();
         let mut deny = |msg: String| d.violations.push(msg);
 
@@ -429,7 +469,7 @@ impl Policy {
             }
         }
 
-        self.check_limits(&spend, &spent_today, &mut deny);
+        self.check_limits(&spend, &spent, &mut deny);
         d.spend = spend;
         d
     }

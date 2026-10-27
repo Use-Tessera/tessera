@@ -88,7 +88,7 @@ fn judge(t: Transaction) -> Vec<String> {
 }
 
 fn judge_env(e: TransactionEnvelope, spent: i128) -> Vec<String> {
-    policy().evaluate(&Intent::from_envelope(&e), &group(), NOW, |_| spent).violations
+    policy().evaluate(&Intent::from_envelope(&e), &group(), NOW, |_, _| spent).violations
 }
 
 fn refused(t: Transaction, needle: &str) {
@@ -98,7 +98,7 @@ fn refused(t: Transaction, needle: &str) {
 
 #[test]
 fn an_ordinary_payment_is_approved() {
-    let d = policy().evaluate(&Intent::from_envelope(&env(tx(vec![xlm(10)]))), &group(), NOW, |_| 0);
+    let d = policy().evaluate(&Intent::from_envelope(&env(tx(vec![xlm(10)]))), &group(), NOW, |_, _| 0);
     assert!(d.approved(), "{:?}", d.violations);
     assert_eq!(d.spend.get("native"), Some(&100_000_000));
 }
@@ -197,7 +197,7 @@ fn destination_allowlist_applies_when_configured() {
         "[destinations]\nallow = [\"GAIH3ULLFQ4DGSECF2AR555KZ4KNDGEKN4AFI4SU2M7B43MGK3QJZNSR\"]",
     );
     let p = Policy::from_toml(&toml).unwrap();
-    let v = p.evaluate(&Intent::from_envelope(&env(tx(vec![xlm(1)]))), &group(), NOW, |_| 0).violations;
+    let v = p.evaluate(&Intent::from_envelope(&env(tx(vec![xlm(1)]))), &group(), NOW, |_, _| 0).violations;
     assert!(v.iter().any(|m| m.contains("not on the allowlist")), "{v:?}");
 }
 
@@ -281,7 +281,7 @@ fn token_policy() -> Policy {
 }
 
 fn judge_tokens(t: Transaction, spent: i128) -> Vec<String> {
-    token_policy().evaluate(&Intent::from_envelope(&env(t)), &group(), NOW, |_| spent).violations
+    token_policy().evaluate(&Intent::from_envelope(&env(t)), &group(), NOW, |_, _| spent).violations
 }
 
 #[test]
@@ -313,8 +313,9 @@ fn token_rules_respect_the_destination_allowlist() {
         include_str!("../../../examples/policy.toml")
     );
     let p = Policy::from_toml(&toml).unwrap();
-    let v =
-        p.evaluate(&Intent::from_envelope(&env(tx(vec![token_transfer(GROUP, 1)]))), &group(), NOW, |_| 0).violations;
+    let v = p
+        .evaluate(&Intent::from_envelope(&env(tx(vec![token_transfer(GROUP, 1)]))), &group(), NOW, |_, _| 0)
+        .violations;
     assert!(v.iter().any(|m| m.contains("not on the allowlist")), "{v:?}");
 }
 
@@ -327,4 +328,51 @@ fn units_respect_decimals() {
     assert_eq!(parse_units("0.0000001", 6), None);
     assert_eq!(format_units(1_500_000, 6), "1.5");
     assert_eq!(format_units(12, 0), "12");
+}
+
+/// The example policy with an hourly limit on XLM: 100 per transaction, 40
+/// per hour, 500 per day.
+fn hourly_policy() -> Policy {
+    let base = include_str!("../../../examples/policy.toml").replace(
+        "per_transaction = \"100\"\nper_day = \"500\"",
+        "per_transaction = \"100\"\nper_day = \"500\"\nper_hour = \"40\"",
+    );
+    assert!(base.contains("per_hour"), "the example policy's native limits moved");
+    Policy::from_toml(&base).unwrap()
+}
+
+/// Judges an XLM payment against what the ledger reports for each window.
+fn judge_windows(units: i64, hour: i128, day: i128) -> Vec<String> {
+    let spent = move |_: &str, window: u64| if window == tessera_policy::HOUR { hour } else { day };
+    hourly_policy().evaluate(&Intent::from_envelope(&env(tx(vec![xlm(units)]))), &group(), NOW, spent).violations
+}
+
+#[test]
+fn an_hourly_limit_caps_spend_inside_the_daily_one() {
+    let stroops = |u: i128| u * 10_000_000;
+    // 30 XLM this hour, 30 today: another 10 fits exactly.
+    assert!(judge_windows(10, stroops(30), stroops(30)).is_empty());
+    // Another 11 would make 41 this hour, though the day is far from 500.
+    let v = judge_windows(11, stroops(30), stroops(30));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(v[0].contains("1h spend of native to 41") && v[0].contains("per_hour 40"), "{v:?}");
+    // An hour later the hourly window is empty again; the day still counts.
+    assert!(judge_windows(40, 0, stroops(450)).is_empty());
+    let v = judge_windows(40, 0, stroops(470));
+    assert!(v.len() == 1 && v[0].contains("per_day"), "{v:?}");
+}
+
+#[test]
+fn an_hourly_limit_above_the_daily_one_is_refused() {
+    let base = include_str!("../../../examples/policy.toml")
+        .replace("per_day = \"500\"", "per_day = \"500\"\nper_hour = \"600\"");
+    let err = Policy::from_toml(&base).unwrap_err().to_string();
+    assert!(err.contains("per_hour is more than per_day"), "{err}");
+}
+
+#[test]
+fn without_per_hour_only_the_day_counts() {
+    let spent = |_: &str, window: u64| if window == tessera_policy::HOUR { i128::MAX / 2 } else { 0 };
+    let d = policy().evaluate(&Intent::from_envelope(&env(tx(vec![xlm(10)]))), &group(), NOW, spent);
+    assert!(d.approved(), "{:?}", d.violations);
 }

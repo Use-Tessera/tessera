@@ -492,3 +492,53 @@ fn rpc_client_reads_the_sequence() {
     assert!(tessera_signer::rpc::latest_ledger(&url).unwrap_err().contains("no sequence"));
     server.join().unwrap();
 }
+
+/// A payment whose expiry follows `now`, for tests that move the clock.
+fn payment_at(source: [u8; 32], xlm: i64, now: u64) -> String {
+    let mut env: TransactionEnvelope = stellar::decode_envelope(&payment(source, xlm)).unwrap();
+    if let TransactionEnvelope::Tx(e) = &mut env {
+        e.tx.cond = Preconditions::Time(TimeBounds { min_time: TimePoint(0), max_time: TimePoint(now + 300) });
+    }
+    stellar::encode_envelope(&env).unwrap()
+}
+
+#[tokio::test]
+async fn hourly_limits_hold_inside_the_hour_and_reset_after_it() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // 100 XLM per transaction and 500 per day, as in the example; 40 per hour.
+    let policy = POLICY.replacen("per_day = \"500\"", "per_day = \"500\"\nper_hour = \"40\"", 1);
+    let clock = Arc::new(AtomicU64::new(NOW));
+    let shares = keys::deal(2, 3).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let routers = shares
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let ledger = SpendLedger::open(&dir.path().join(format!("spend-{i}.jsonl"))).unwrap();
+            let c = clock.clone();
+            let signer = Signer::new(s.clone(), Network::from_name("testnet"), &policy, Some(TOKEN.into()), ledger)
+                .unwrap()
+                .with_clock(move || c.load(Ordering::SeqCst));
+            router(Arc::new(signer))
+        })
+        .collect();
+    let g = Group { shares, routers, _dir: dir };
+    let key = g.shares[0].group_public_key();
+    let sign = |session: &'static str, xlm: i64| {
+        let g = &g;
+        let now = clock.load(Ordering::SeqCst);
+        async move {
+            let commitments = round1(g, &[0, 1], session).await;
+            let body = json!({ "session": session, "envelope": payment_at(key, xlm, now), "commitments": commitments });
+            post(&g.routers[0], "/v1/round2", body).await
+        }
+    };
+
+    assert_eq!(sign("h1", 30).await.0, StatusCode::OK, "30 of 40 this hour");
+    clock.store(NOW + 600, Ordering::SeqCst); // ten minutes later
+    let (st, v) = sign("h2", 15).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "45 in one hour is over 40: {v}");
+    assert!(v["violations"][0].as_str().unwrap().contains("per_hour 40"), "{v}");
+    clock.store(NOW + 3_601, Ordering::SeqCst); // the first payment is now more than an hour old
+    assert_eq!(sign("h3", 15).await.0, StatusCode::OK, "a new hour");
+}

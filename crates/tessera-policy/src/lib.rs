@@ -12,7 +12,7 @@
 //! # let group = stellar::account_id(&[9; 32]);
 //!
 //! let policy = Policy::from_toml(include_str!("../../../examples/policy.toml"))?;
-//! let decision = policy.evaluate(&Intent::from_envelope(&envelope), &group, 1_791_249_500, |_asset| 0);
+//! let decision = policy.evaluate(&Intent::from_envelope(&envelope), &group, 1_791_249_500, |_asset, _window| 0);
 //! assert!(decision.approved(), "{:?}", decision.violations);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -21,4 +21,6 @@ mod intent;
 mod policy;
 
 pub use intent::{AuthCall, AuthIntent, Intent, Op, OpKind, TokenTransfer};
-pub use policy::{Decision, OPERATIONS, Policy, PolicyError, format_amount, format_units, parse_amount, parse_units};
+pub use policy::{
+    DAY, Decision, HOUR, OPERATIONS, Policy, PolicyError, format_amount, format_units, parse_amount, parse_units,
+};

@@ -8,16 +8,25 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Hourly limits: `per_hour` on `[[asset]]` and `[[token]]` caps the trailing
+  hour as well as the trailing day, so a compromised application or agent
+  can't spend the day's budget in minutes. It is refused at load if it is
+  above `per_day`, where it could never apply.
 - Mutual TLS for `tessera-signer`: with `[tls]` in `signer.toml` (certificate,
   key and client CA, all PEM) the signer serves HTTPS and accepts only clients
   whose certificate chains to the CA, with the bearer token still required.
   rustls with the `ring` provider.
-
 - `tessera-wasm` (`bindings/wasm`): the signing policy for JavaScript.
   `check()` judges a base64 transaction envelope or Soroban authorization
   entry against a `policy.toml`; `samples()` builds example inputs.
 - A [policy checker](https://use-tessera.github.io/tessera/) on GitHub Pages,
   running the signer's own policy code in the browser.
+
+### Changed
+
+- `Policy::evaluate` and `evaluate_auth` take `spent(asset, window)` instead
+  of `spent_today(asset)`, with `window` either `tessera_policy::DAY` or
+  `HOUR` in seconds. `SpendLedger::spent_within` answers it.
 
 ## [0.1.1] - 2026-10-07
 

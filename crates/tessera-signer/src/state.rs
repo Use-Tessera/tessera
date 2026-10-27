@@ -96,10 +96,15 @@ impl SpendLedger {
 
     /// Stroops of `asset` approved in the 24 hours before `now`.
     pub fn spent_since(&self, asset: &str, now: u64) -> i128 {
+        self.spent_within(asset, now, DAY)
+    }
+
+    /// Stroops of `asset` approved in the `window` seconds before `now`.
+    pub fn spent_within(&self, asset: &str, now: u64, window: u64) -> i128 {
         let entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries
             .iter()
-            .filter(|e| e.asset == asset && e.time.saturating_add(DAY) > now)
+            .filter(|e| e.asset == asset && e.time.saturating_add(window) > now)
             .fold(0i128, |acc, e| acc.saturating_add(e.amount))
     }
 

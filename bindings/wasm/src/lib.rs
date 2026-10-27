@@ -54,7 +54,7 @@ pub fn check(policy_toml: &str, xdr: &str, account: &str, now: f64, latest_ledge
     }
     if let Ok(env) = TransactionEnvelope::from_xdr_base64(xdr, DECODE_LIMITS) {
         let intent = Intent::from_envelope(&env);
-        let decision = policy.evaluate(&intent, account, now, |_| 0);
+        let decision = policy.evaluate(&intent, account, now, |_, _| 0);
         return judged("transaction", describe_tx(&intent), &decision);
     }
     if let Ok(entry) = SorobanAuthorizationEntry::from_xdr_base64(xdr, DECODE_LIMITS) {
@@ -65,7 +65,7 @@ pub fn check(policy_toml: &str, xdr: &str, account: &str, now: f64, latest_ledge
                     .into(),
             );
         };
-        let decision = policy.evaluate_auth(&intent, account, latest_ledger, |_| 0);
+        let decision = policy.evaluate_auth(&intent, account, latest_ledger, |_, _| 0);
         return judged("authorization", describe_auth(&intent), &decision);
     }
     fail("xdr", "this is not a base64 TransactionEnvelope or SorobanAuthorizationEntry".into())
