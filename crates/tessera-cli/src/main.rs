@@ -211,7 +211,7 @@ fn check(policy: &Path, account: &str, b64: &str) -> Result<ExitCode, String> {
     let policy = Policy::from_toml(&read(policy)?).map_err(|e| e.to_string())?;
     let env = stellar::decode_envelope(b64).map_err(|e| e.to_string())?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    report(&policy.evaluate(&Intent::from_envelope(&env), account, now, |_| 0))
+    report(&policy.evaluate(&Intent::from_envelope(&env), account, now, |_, _| 0))
 }
 
 fn check_auth(policy: &Path, account: &str, latest_ledger: u32, b64: &str) -> Result<ExitCode, String> {
@@ -228,7 +228,7 @@ fn check_auth(policy: &Path, account: &str, latest_ledger: u32, b64: &str) -> Re
         };
         eprintln!("call {i:<6} {what}");
     }
-    report(&policy.evaluate_auth(&intent, account, latest_ledger, |_| 0))
+    report(&policy.evaluate_auth(&intent, account, latest_ledger, |_, _| 0))
 }
 
 /// Prints a decision; exit status 1 if refused. Spend limits are judged as if

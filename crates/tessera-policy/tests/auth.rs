@@ -62,7 +62,7 @@ fn entry(address: [u8; 32], expires: u32, root: SorobanAuthorizedInvocation) -> 
 }
 
 fn judge(p: &Policy, e: &SorobanAuthorizationEntry, spent: i128) -> Vec<String> {
-    p.evaluate_auth(&AuthIntent::from_entry(e).unwrap(), &account_id(&GROUP), LEDGER, |_| spent).violations
+    p.evaluate_auth(&AuthIntent::from_entry(e).unwrap(), &account_id(&GROUP), LEDGER, |_, _| spent).violations
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn an_x402_style_token_payment_is_approved() {
         &AuthIntent::from_entry(&entry(GROUP, LEDGER + 60, transfer(GROUP, 5))).unwrap(),
         &account_id(&GROUP),
         LEDGER,
-        |_| 0,
+        |_, _| 0,
     );
     assert!(d.approved(), "{:?}", d.violations);
     assert_eq!(d.spend.get(XLM), Some(&50_000_000));

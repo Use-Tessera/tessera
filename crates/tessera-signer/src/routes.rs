@@ -273,7 +273,8 @@ async fn round2(State(s): State<Arc<Signer>>, Json(req): Json<Round2Request>) ->
     let now = (s.clock)();
 
     let intent = Intent::from_envelope(&envelope);
-    let decision = s.policy.evaluate(&intent, &s.share.account(), now, |asset| s.ledger.spent_since(asset, now));
+    let decision =
+        s.policy.evaluate(&intent, &s.share.account(), now, |asset, window| s.ledger.spent_within(asset, now, window));
     let (package, hash) = signing::signing_package(&s.network, &envelope, &req.commitments)?;
     let tx = hex::encode(hash);
     s.decide("transaction", &hash, &decision.violations);
@@ -343,8 +344,9 @@ async fn round2_auth(State(s): State<Arc<Signer>>, Json(req): Json<AuthRound2Req
     let intent = AuthIntent::from_entry(&entry)
         .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "only address-credential entries can be signed"))?;
     let now = (s.clock)();
-    let decision =
-        s.policy.evaluate_auth(&intent, &s.share.account(), latest, |asset| s.ledger.spent_since(asset, now));
+    let decision = s
+        .policy
+        .evaluate_auth(&intent, &s.share.account(), latest, |asset, window| s.ledger.spent_within(asset, now, window));
     let hash = auth::payload_hash(&s.network, &entry)?;
     let tag = hex::encode(hash);
     s.decide("authorization", &hash, &decision.violations);

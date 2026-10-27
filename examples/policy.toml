@@ -14,7 +14,9 @@ max_validity = 900
 allow = ["payment", "invoke_contract"]
 
 # Assets the group may send, in whole units (up to 7 decimals). Payments in
-# unlisted assets are refused.
+# unlisted assets are refused. `per_day` counts the trailing 24 hours; an
+# optional `per_hour` caps the trailing hour too, so a compromised app or
+# agent can't spend the whole day's budget in minutes. [[token]] takes both.
 [[asset]]
 asset = "native"
 per_transaction = "100"
@@ -24,6 +26,7 @@ per_day = "500"
 asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
 per_transaction = "250"
 per_day = "1000"
+per_hour = "300"
 
 # Optional. When present, payments may only go to these accounts.
 # [destinations]
