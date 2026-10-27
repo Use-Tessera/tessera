@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-27
+
 ### Added
 
 - Hourly limits: `per_hour` on `[[asset]]` and `[[token]]` caps the trailing
@@ -27,6 +29,12 @@ All notable changes to this project are documented here. The format follows
 - `Policy::evaluate` and `evaluate_auth` take `spent(asset, window)` instead
   of `spent_today(asset)`, with `window` either `tessera_policy::DAY` or
   `HOUR` in seconds. `SpendLedger::spent_within` answers it.
+- axum-server 0.8, which drops the unmaintained `rustls-pemfile`.
+
+### Security
+
+- Updated rustls, rustls-webpki and tokio past seven RustSec advisories
+  (RUSTSEC-2026-0346 to -0349, -0381, -0382 and -0386).
 
 ## [0.1.1] - 2026-10-07
 
@@ -60,6 +68,7 @@ All notable changes to this project are documented here. The format follows
 - Container image for the signer, and release binaries for Linux, macOS and
   Windows.
 
-[Unreleased]: https://github.com/Use-Tessera/tessera/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Use-Tessera/tessera/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Use-Tessera/tessera/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Use-Tessera/tessera/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Use-Tessera/tessera/releases/tag/v0.1.0
