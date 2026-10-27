@@ -63,10 +63,25 @@ async fn run(args: Args) -> Result<(), String> {
         signer = signer.with_ledger_source(move || tessera_signer::rpc::latest_ledger(&url));
     }
 
+    let app = router(Arc::new(signer));
+    if let Some(tls) = &cfg.tls {
+        let config = tessera_signer::tls::server_config(tls)?;
+        let listener = std::net::TcpListener::bind(&cfg.listen).map_err(|e| format!("binding {}: {e}", cfg.listen))?;
+        let handle = axum_server::Handle::new();
+        tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                let _ = tokio::signal::ctrl_c().await;
+                handle.graceful_shutdown(Some(tessera_signer::tls::SHUTDOWN_GRACE));
+            }
+        });
+        tracing::info!(listen = cfg.listen, "serving over mutual TLS");
+        return tessera_signer::tls::serve(listener, app, config, handle).await;
+    }
     let listener =
         tokio::net::TcpListener::bind(&cfg.listen).await.map_err(|e| format!("binding {}: {e}", cfg.listen))?;
     tracing::info!(listen = cfg.listen, "serving");
-    axum::serve(listener, router(Arc::new(signer)))
+    axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

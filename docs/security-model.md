@@ -92,8 +92,13 @@ These are tracked as roadmap items, not hidden:
    signed by long-term identities; their authenticity rests on operators
    comparing the fingerprint over an independent channel. `tessera keygen`
    remains for development and sees the whole key while it runs.
-2. **Bearer-token transport auth.** Signer endpoints check a shared bearer
-   token in constant time. Deploy them behind TLS. Mutual TLS is planned.
+2. **Transport auth is opt-in.** With `[tls]` in `signer.toml`, a signer
+   serves only over mutual TLS: it accepts a client only if the client's
+   certificate chains to the configured CA, and still requires the bearer
+   token on top, so a leaked token alone reaches nothing. Without `[tls]` it
+   serves plain HTTP with the token alone, which is only safe on a private
+   network or behind a TLS terminator. Certificates are not revoked or
+   rotated by the signer: replace the CA file and restart.
 3. **Limits are per signer and per asset.** They do not convert between
    assets. SEP-41 `transfer` calls are capped when the token is listed under
    `[[token]]`; other contract functions (`approve`, swaps, custom calls) are

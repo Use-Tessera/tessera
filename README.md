@@ -119,6 +119,13 @@ state_dir = "state"
 token_env = "TESSERA_TOKEN"
 # Optional: read the latest ledger here instead of trusting the coordinator's
 rpc = "https://soroban-testnet.stellar.org"
+
+# Optional: serve only over mutual TLS (PEM files). The coordinator must present
+# a certificate issued by client_ca, and the token is still required.
+[tls]
+cert = "signer.crt"
+key = "signer.key"
+client_ca = "coordinator-ca.crt"
 ```
 
 The policy format is documented in [`examples/policy.toml`](examples/policy.toml).
@@ -182,8 +189,8 @@ soon as round 2 is attempted, whether it signs or refuses.
 
 Read [docs/security-model.md](docs/security-model.md) before trusting this with
 funds. In short: generate keys with `tessera dkg`, not the development
-dealer; signers authenticate the coordinator with bearer tokens rather than
-mTLS; and the code has not been audited.
+dealer; turn on `[tls]` so signers accept only the coordinator's certificate
+as well as its token; and the code has not been audited.
 
 ## Roadmap
 
@@ -194,8 +201,8 @@ mTLS; and the code has not been audited.
    untrusted relay, and proactive share refresh: done.
 4. **Richer signing.** Soroban authorization entries (address credentials)
    and SEP-41 `transfer` limits: done.
-5. **Hardening.** mTLS between coordinator and signers, HSM/enclave-backed
-   share storage, and an external audit.
+5. **Hardening.** Mutual TLS between coordinator and signers: done. Next,
+   HSM/enclave-backed share storage, and an external audit.
 
 ## Contributing
 

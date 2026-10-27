@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Mutual TLS for `tessera-signer`: with `[tls]` in `signer.toml` (certificate,
+  key and client CA, all PEM) the signer serves HTTPS and accepts only clients
+  whose certificate chains to the CA, with the bearer token still required.
+  rustls with the `ring` provider.
+
 - `tessera-wasm` (`bindings/wasm`): the signing policy for JavaScript.
   `check()` judges a base64 transaction envelope or Soroban authorization
   entry against a `policy.toml`; `samples()` builds example inputs.
