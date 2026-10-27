@@ -24,8 +24,8 @@ ordinary signature:
 
 - **no contract and no multisig setup**, so it works for G-accounts, Soroban
   source-account auth, and anything else that verifies Ed25519;
-- **one signature on chain**, so fees and transaction size don't grow with the
-  number of signers;
+- **one signature on chain**, so the transaction doesn't grow with the number
+  of signers;
 - **a private signer set**: nothing on chain reveals how many parties signed or
   who they are.
 
@@ -53,6 +53,29 @@ error: policy refused: 01000000: spends 150 native, more than per_transaction 10
 Reproduce it with [`scripts/testnet-demo.sh`](https://github.com/Use-Tessera/tessera-coordinator/blob/main/scripts/testnet-demo.sh).
 
 Testnet is reset every few months, after which these links stop resolving; the script reproduces the whole run on a fresh network.
+
+## Why not Stellar's native multisig?
+
+Stellar accounts already support several weighted signers with thresholds.
+That is the right choice for many teams. Tessera is for when its trade-offs
+don't fit:
+
+| | Native multisig | Tessera |
+|---|---|---|
+| What the chain sees | The account's signers, weights and thresholds, and which keys signed each transaction | One ordinary key and one signature |
+| Changing who can sign | `set_options` on chain, visible to everyone | Share refresh or a new key ceremony off chain; the account doesn't change |
+| Group size | Up to 20 signatures per transaction | Any `t` of `n`; still one signature |
+| Transaction size | Grows by 72 bytes per signature (it counts toward Soroban resource fees) | Constant |
+| Where it works | Stellar accounts | Anything that checks one Ed25519 key: Stellar accounts, Soroban auth, SEP-10, off-chain messages |
+| Per-signer spending policy | Up to each signer's own wallet software | Built into every signer daemon, deny by default, checked on the decoded transaction |
+| Moving parts | None: it's in the protocol | Signer daemons and a coordinator, with two network rounds per signature |
+| Maturity | Battle-tested since 2015 | New and unaudited (see [Status and limits](#status-and-limits)) |
+
+Choose Tessera when the signer set should stay private or change without an
+on-chain trace, when one key has to work beyond Stellar's account model, or
+when you want spending rules enforced by every signer rather than trusted to
+each one's wallet. An AI agent holding one share, for instance, can propose
+payments, but the policy-checking signers decide which are made.
 
 ## Try a policy in your browser
 
