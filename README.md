@@ -43,6 +43,7 @@ past the policy.
 |---|---|
 | 2-of-3 group pays 1 XLM; one signature on chain | [`11302d7d…6eb7`](https://stellar.expert/explorer/testnet/tx/11302d7dd5c62fd059e6d90bb4a1574b9da286187bf8e2e3fb121e6f5d3b6eb7) |
 | Full stack: three signer daemons, one offline, Go coordinator submits | [`ddfa1079…5009`](https://stellar.expert/explorer/testnet/tx/ddfa10791ce6f24fa1950eee3dd1ae71fa3335c92a58737751c606079bfd5009) |
+| An AI agent with no key pays an API (HTTP 402) from the group; a prompt-injected 100 XLM transfer and the call past its hourly limit are refused | [`0a40a9a7…9895`](https://stellar.expert/explorer/testnet/tx/0a40a9a76450f67c1480afa0af8faf742998bc5b54dee7de9e278643ab169895), one of [five payments](https://github.com/Use-Tessera/tessera-coordinator#an-agent-pays-for-an-api) |
 
 In the same run, a 150 XLM request was refused by both remaining signers:
 
@@ -50,7 +51,8 @@ In the same run, a 150 XLM request was refused by both remaining signers:
 error: policy refused: 01000000: spends 150 native, more than per_transaction 100 | 03000000: spends 150 native, more than per_transaction 100
 ```
 
-Reproduce it with [`scripts/testnet-demo.sh`](https://github.com/Use-Tessera/tessera-coordinator/blob/main/scripts/testnet-demo.sh).
+Reproduce it with [`scripts/testnet-demo.sh`](https://github.com/Use-Tessera/tessera-coordinator/blob/main/scripts/testnet-demo.sh),
+and the agent run with [`scripts/agent-demo.sh`](https://github.com/Use-Tessera/tessera-coordinator/blob/main/scripts/agent-demo.sh).
 
 Testnet is reset every few months, after which these links stop resolving; the script reproduces the whole run on a fresh network.
 
