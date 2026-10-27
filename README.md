@@ -94,7 +94,7 @@ image (`ghcr.io/use-tessera/tessera-signer`, amd64 and arm64), or build the
 release from source:
 
 ```sh
-cargo install --git https://github.com/Use-Tessera/tessera --tag v0.1.1 --locked tessera-cli tessera-signer
+cargo install --git https://github.com/Use-Tessera/tessera --tag v0.2.0 --locked tessera-cli tessera-signer
 
 # 2-of-3 group for development: one machine deals all three shares,
 # each encrypted with Argon2id + XChaCha20-Poly1305

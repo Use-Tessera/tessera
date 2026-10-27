@@ -1609,7 +1609,7 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "tessera-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-policy"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "stellar-xdr",
@@ -1656,7 +1656,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-signer"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -1683,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-wasm"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
