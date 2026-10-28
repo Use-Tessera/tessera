@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use rcgen::{BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair};
+use rcgen::{BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tessera_core::keys;
@@ -18,21 +18,22 @@ const POLICY: &str = include_str!("../../../examples/policy.toml");
 
 struct Ca {
     cert: Certificate,
-    key: KeyPair,
+    issuer: Issuer<'static, KeyPair>,
 }
 
 fn ca() -> Ca {
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    Ca { cert: params.self_signed(&key).unwrap(), key }
+    let cert = params.self_signed(&key).unwrap();
+    Ca { cert, issuer: Issuer::new(params, key) }
 }
 
 fn issue(ca: &Ca, name: &str, usage: ExtendedKeyUsagePurpose) -> (Certificate, KeyPair) {
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(vec![name.to_owned()]).unwrap();
     params.extended_key_usages = vec![usage];
-    (params.signed_by(&key, &ca.cert, &ca.key).unwrap(), key)
+    (params.signed_by(&key, &ca.issuer).unwrap(), key)
 }
 
 /// Starts the real signer router over mutual TLS; returns its port.
