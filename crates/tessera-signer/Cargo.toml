@@ -34,7 +34,7 @@ hex.workspace = true
 sha2.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.9", default-features = false, features = ["tls-rustls-no-provider"] }
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
